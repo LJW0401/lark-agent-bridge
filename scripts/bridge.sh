@@ -51,7 +51,7 @@ call_agent() {
     local prompt="$1"
     local result=""
 
-    log "Calling $AGENT_TYPE..."
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Calling $AGENT_TYPE..." >> "$LOG_FILE"
 
     case "$AGENT_TYPE" in
         codex)
