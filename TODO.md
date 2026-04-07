@@ -8,15 +8,15 @@
 
 ## 交互体验
 
-- [ ] 流式回复 — Agent 生成过程中逐步更新消息
-- [ ] 回复引用 — 用 reply 方式回复原消息，保持对话关系
-- [ ] 取消请求 — `/cancel` 中断当前 Agent 调用
+- [x] 流式回复 — Agent 生成过程中逐步更新消息
+- [x] 回复引用 — 用 reply 方式回复原消息，保持对话关系
+- [x] 取消请求 — `/cancel` 中断当前 Agent 调用
 
 ## 多用户/多场景
 
 - [ ] 按用户隔离会话 — 群聊中按 user_id 而非 chat_id 隔离上下文
 - [ ] Agent 预设角色 — `/role <name>` 设定系统提示词
-- [ ] 工作目录切换 — `/workspace <path>` 指定 Codex 工作目录
+- [x] 工作目录切换 — `/workspace <path>` 指定 Codex 工作目录
 
 ## 运维管理
 

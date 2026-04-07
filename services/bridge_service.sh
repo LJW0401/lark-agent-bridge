@@ -60,6 +60,8 @@ WorkingDirectory=${PROJECT_DIR}
 ExecStart=${BRIDGE_SCRIPT}
 Restart=always
 RestartSec=5
+KillMode=control-group
+KillSignal=SIGTERM
 Environment=PATH=${USER_PATH}
 Environment=HOME=/home/${RUN_USER}
 EnvironmentFile=-${ENV_FILE}
