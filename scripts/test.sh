@@ -47,11 +47,22 @@ fi
 
 # Test 4: Codex CLI responds
 echo "Test 4: Codex CLI basic call"
-if result=$($CODEX_CMD exec "Reply with only: OK" 2>&1); then
+codex_test_output="$(mktemp)"
+if timeout 30s "$CODEX_CMD" exec \
+    -o "$codex_test_output" \
+    --color never \
+    "Reply with only: OK" >/dev/null 2>&1; then
+    result="$(tr -d '\r' < "$codex_test_output")"
     pass "Codex CLI responded: ${result:0:100}"
 else
+    if [[ -f "$codex_test_output" ]]; then
+        result="$(tr -d '\r' < "$codex_test_output")"
+    else
+        result="no output captured"
+    fi
     fail "Codex CLI call failed: ${result:0:100}"
 fi
+rm -f "$codex_test_output"
 
 # Test 5: jq installed
 echo "Test 5: jq installation"
