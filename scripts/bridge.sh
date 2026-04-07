@@ -24,18 +24,31 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
 }
 
-# Add emoji reaction to a message, returns reaction_id
+# Add emoji reaction to a message, returns reaction_id (with retry)
 add_reaction() {
     local message_id="$1"
     local emoji_type="$2"
+    local attempt=0
 
-    local response
-    response=$(lark-cli im reactions create \
-        --params "{\"message_id\":\"$message_id\"}" \
-        --data "{\"reaction_type\":{\"emoji_type\":\"$emoji_type\"}}" \
-        --as bot 2>&1) || true
+    while (( attempt < MAX_RETRIES )); do
+        local response
+        response=$(lark-cli im reactions create \
+            --params "{\"message_id\":\"$message_id\"}" \
+            --data "{\"reaction_type\":{\"emoji_type\":\"$emoji_type\"}}" \
+            --as bot 2>&1) || true
 
-    echo "$response" | jq -r '.data.reaction_id // empty' 2>/dev/null
+        local rid
+        rid=$(echo "$response" | jq -r '.data.reaction_id // empty' 2>/dev/null)
+
+        if [[ -n "$rid" ]]; then
+            echo "$rid"
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        log "Add reaction failed (attempt $attempt/$MAX_RETRIES)"
+        sleep 2
+    done
 }
 
 # Remove emoji reaction from a message (with retry)
