@@ -14,6 +14,8 @@ AGENT_TYPE="${AGENT_TYPE:-codex}"
 CODEX_CMD="${CODEX_CMD:-codex}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 WORKING_EMOJI="${WORKING_EMOJI:-OnIt}"
+ERROR_EMOJI="${ERROR_EMOJI:-Frown}"
+MAX_RETRIES="${MAX_RETRIES:-3}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -72,7 +74,7 @@ call_agent() {
     echo "$result"
 }
 
-# Reply to a Feishu chat
+# Reply to a Feishu chat (with retry)
 reply_to_feishu() {
     local chat_id="$1"
     local message="$2"
@@ -82,10 +84,38 @@ reply_to_feishu() {
         message="${message:0:3997}..."
     fi
 
-    lark-cli im +messages-send \
-        --chat-id "$chat_id" \
-        --text "$message" \
-        --as bot 2>&1 || log "Failed to send reply"
+    local attempt=0
+    while (( attempt < MAX_RETRIES )); do
+        local response
+        response=$(lark-cli im +messages-send \
+            --chat-id "$chat_id" \
+            --text "$message" \
+            --as bot 2>&1)
+
+        if echo "$response" | jq -e '.ok == true' &>/dev/null; then
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        log "Reply failed (attempt $attempt/$MAX_RETRIES): $(echo "$response" | head -c 200)"
+        sleep 2
+    done
+
+    log "Reply failed after $MAX_RETRIES attempts"
+    return 1
+}
+
+# Send error feedback to Feishu
+reply_error_to_feishu() {
+    local chat_id="$1"
+    local message_id="$2"
+    local error_msg="$3"
+
+    # Add error emoji
+    add_reaction "$message_id" "$ERROR_EMOJI" >/dev/null
+
+    # Send error message
+    reply_to_feishu "$chat_id" "[错误] $error_msg" || true
 }
 
 # Main loop: subscribe to bot message events
@@ -133,11 +163,18 @@ main() {
         result=$(call_agent "$prompt")
         log "Agent response: ${result:0:200}..."
 
-        # Step 3: Reply result to Feishu
-        reply_to_feishu "$chat_id" "$result"
-        log "Reply sent to $chat_id"
+        # Step 3: Check result and reply
+        if [[ -z "$result" ]]; then
+            log "Error: Agent returned empty result"
+            reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试"
+        elif ! reply_to_feishu "$chat_id" "$result"; then
+            log "Error: Failed to send reply to Feishu"
+            reply_error_to_feishu "$chat_id" "$message_id" "回复发送失败，请稍后重试"
+        else
+            log "Reply sent to $chat_id"
+        fi
 
-        # Step 4: Remove emoji reaction (task complete)
+        # Step 4: Remove working emoji (task complete)
         if [[ -n "$reaction_id" ]]; then
             remove_reaction "$message_id" "$reaction_id"
             log "Removed reaction: task complete"
