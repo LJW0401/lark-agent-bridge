@@ -13,7 +13,7 @@ fi
 AGENT_TYPE="${AGENT_TYPE:-codex}"
 CODEX_CMD="${CODEX_CMD:-codex}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude}"
-WORKING_EMOJI="${WORKING_EMOJI:-ONIT}"
+WORKING_EMOJI="${WORKING_EMOJI:-OnIt}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
@@ -51,14 +51,18 @@ call_agent() {
     local prompt="$1"
     local result=""
 
+    log "Calling $AGENT_TYPE..."
+
     case "$AGENT_TYPE" in
         codex)
-            log "Calling Codex CLI..."
-            result=$($CODEX_CMD exec "$prompt" 2>&1) || true
+            local tmpfile
+            tmpfile=$(mktemp /tmp/codex_out.XXXXXX)
+            $CODEX_CMD exec "$prompt" -o "$tmpfile" >/dev/null 2>&1 || true
+            result=$(cat "$tmpfile" 2>/dev/null)
+            rm -f "$tmpfile"
             ;;
         claude)
-            log "Calling Claude Code..."
-            result=$($CLAUDE_CMD -p "$prompt" 2>&1) || true
+            result=$($CLAUDE_CMD -p "$prompt" 2>/dev/null) || true
             ;;
         *)
             result="Unknown agent type: $AGENT_TYPE"
