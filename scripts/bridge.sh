@@ -315,17 +315,24 @@ truncate_message() {
 }
 
 # Reply to a Feishu message by quoting it (with retry), prints message_id on success
+# Usage: reply_to_feishu <message_id> <text> [--markdown]
 reply_to_feishu() {
     local message_id="$1"
     local message
     message=$(truncate_message "$2")
+    local use_markdown="${3:-}"
+
+    local msg_flag="--text"
+    if [[ "$use_markdown" == "--markdown" ]]; then
+        msg_flag="--markdown"
+    fi
 
     local attempt=0
     while (( attempt < MAX_RETRIES )); do
         local response
         response=$(lark-cli im +messages-reply \
             --message-id "$message_id" \
-            --text "$message" \
+            $msg_flag "$message" \
             --as bot 2>&1)
 
         local reply_msg_id
@@ -372,16 +379,24 @@ send_to_feishu() {
 }
 
 # Update an existing Feishu message (for streaming)
+# Usage: update_message <msg_id> <text> [--markdown]
 update_message() {
     local msg_id="$1"
     local message
     message=$(truncate_message "$2")
+    local use_markdown="${3:-}"
 
-    local content
-    content=$(jq -n --arg text "$message" '{"text":$text}' | jq -c .)
+    local msg_type content
+    if [[ "$use_markdown" == "--markdown" ]]; then
+        msg_type="post"
+        content=$(jq -n --arg md "$message" '{"zh_cn":{"content":[[{"tag":"md","text":$md}]]}}' | jq -c .)
+    else
+        msg_type="text"
+        content=$(jq -n --arg text "$message" '{"text":$text}' | jq -c .)
+    fi
 
     lark-cli api PUT "/open-apis/im/v1/messages/$msg_id" \
-        --data "$(jq -n --arg c "$content" '{msg_type:"text",content:$c}')" \
+        --data "$(jq -n --arg t "$msg_type" --arg c "$content" '{msg_type:$t,content:$c}')" \
         --as bot 2>/dev/null || true
 }
 
@@ -472,7 +487,7 @@ process_message() {
         fi
         reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试"
     elif [[ -n "$reply_msg_id" ]]; then
-        update_message "$reply_msg_id" "$(truncate_message "$result")"
+        update_message "$reply_msg_id" "$(truncate_message "$result")" --markdown
         log "Reply sent to $chat_id"
     else
         log "Error: Failed to create reply message"
