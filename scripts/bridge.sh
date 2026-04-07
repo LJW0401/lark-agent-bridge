@@ -290,7 +290,7 @@ HELP
                 continue
                 ;;
             /agent)
-                reply_to_feishu "$chat_id" "当前 Agent 类型: $AGENT_TYPE（可用: codex, claude）\n用法: /agent codex 或 /agent claude" || true
+                reply_to_feishu "$chat_id" "$(printf '当前 Agent 类型: %s（可用: codex, claude）\n用法: /agent codex 或 /agent claude' "$AGENT_TYPE")" || true
                 log "Command: /agent (query)"
                 continue
                 ;;
@@ -313,7 +313,7 @@ HELP
                 continue
                 ;;
             /*)
-                reply_to_feishu "$chat_id" "未知命令: $prompt\n输入 /help 查看可用命令列表。" || true
+                reply_to_feishu "$chat_id" "$(printf '未知命令: %s\n输入 /help 查看可用命令列表。' "$prompt")" || true
                 log "Unknown command: $prompt"
                 continue
                 ;;
