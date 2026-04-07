@@ -47,7 +47,7 @@ fi
 
 # Test 4: Codex CLI responds
 echo "Test 4: Codex CLI basic call"
-if result=$($CODEX_CMD -q "Reply with only: OK" 2>&1); then
+if result=$($CODEX_CMD exec "Reply with only: OK" 2>&1); then
     pass "Codex CLI responded: ${result:0:100}"
 else
     fail "Codex CLI call failed: ${result:0:100}"

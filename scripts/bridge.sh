@@ -13,12 +13,37 @@ fi
 AGENT_TYPE="${AGENT_TYPE:-codex}"
 CODEX_CMD="${CODEX_CMD:-codex}"
 CLAUDE_CMD="${CLAUDE_CMD:-claude}"
+WORKING_EMOJI="${WORKING_EMOJI:-ONIT}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
+}
+
+# Add emoji reaction to a message, returns reaction_id
+add_reaction() {
+    local message_id="$1"
+    local emoji_type="$2"
+
+    local response
+    response=$(lark-cli im reactions create \
+        --params "{\"message_id\":\"$message_id\"}" \
+        --data "{\"reaction_type\":{\"emoji_type\":\"$emoji_type\"}}" \
+        --as bot 2>&1) || true
+
+    echo "$response" | jq -r '.data.reaction_id // empty' 2>/dev/null
+}
+
+# Remove emoji reaction from a message
+remove_reaction() {
+    local message_id="$1"
+    local reaction_id="$2"
+
+    lark-cli im reactions delete \
+        --params "{\"message_id\":\"$message_id\",\"reaction_id\":\"$reaction_id\"}" \
+        --as bot 2>&1 >/dev/null || log "Failed to remove reaction"
 }
 
 # Call AI agent with the given prompt
@@ -29,7 +54,7 @@ call_agent() {
     case "$AGENT_TYPE" in
         codex)
             log "Calling Codex CLI..."
-            result=$($CODEX_CMD -q "$prompt" 2>&1) || true
+            result=$($CODEX_CMD exec "$prompt" 2>&1) || true
             ;;
         claude)
             log "Calling Claude Code..."
@@ -63,14 +88,17 @@ reply_to_feishu() {
 main() {
     log "=== lark-agent-bridge started ==="
     log "Agent type: $AGENT_TYPE"
+    log "Working emoji: $WORKING_EMOJI"
     log "Listening for Feishu bot messages..."
 
     lark-cli event +subscribe \
-        --events "im.message.receive_v1" \
-        --format compact | while IFS= read -r event; do
+        --event-types "im.message.receive_v1" \
+        --compact \
+        --as bot | while IFS= read -r event; do
 
         # Parse event fields
         chat_id=$(echo "$event" | jq -r '.event.message.chat_id // empty' 2>/dev/null)
+        message_id=$(echo "$event" | jq -r '.event.message.message_id // empty' 2>/dev/null)
         msg_type=$(echo "$event" | jq -r '.event.message.message_type // empty' 2>/dev/null)
         content_raw=$(echo "$event" | jq -r '.event.message.content // empty' 2>/dev/null)
 
@@ -83,20 +111,30 @@ main() {
         # Extract text from content JSON
         prompt=$(echo "$content_raw" | jq -r '.text // empty' 2>/dev/null)
 
-        if [[ -z "$prompt" || -z "$chat_id" ]]; then
-            log "Skipping: empty prompt or chat_id"
+        if [[ -z "$prompt" || -z "$chat_id" || -z "$message_id" ]]; then
+            log "Skipping: empty prompt, chat_id, or message_id"
             continue
         fi
 
-        log "Received: $prompt (chat: $chat_id)"
+        log "Received: $prompt (chat: $chat_id, msg: $message_id)"
 
-        # Call AI agent
+        # Step 1: Add emoji reaction (working indicator)
+        reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
+        log "Added reaction: $reaction_id"
+
+        # Step 2: Call AI agent
         result=$(call_agent "$prompt")
         log "Agent response: ${result:0:200}..."
 
-        # Reply to Feishu
+        # Step 3: Reply result to Feishu
         reply_to_feishu "$chat_id" "$result"
         log "Reply sent to $chat_id"
+
+        # Step 4: Remove emoji reaction (task complete)
+        if [[ -n "$reaction_id" ]]; then
+            remove_reaction "$message_id" "$reaction_id"
+            log "Removed reaction: task complete"
+        fi
 
     done
 
