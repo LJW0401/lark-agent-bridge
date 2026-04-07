@@ -252,12 +252,72 @@ main() {
         log "Received: $prompt (chat: $chat_id, msg: $message_id)"
 
         # Handle special commands
-        if [[ "$prompt" == "新对话" || "$prompt" == "/new" ]]; then
-            clear_session "$chat_id"
-            reply_to_feishu "$chat_id" "已开始新对话，之前的上下文已清除。" || true
-            log "Session cleared for $chat_id"
-            continue
-        fi
+        case "$prompt" in
+            /help|帮助)
+                reply_to_feishu "$chat_id" "$(cat <<'HELP'
+📋 可用命令：
+/help    — 显示此帮助信息
+/status  — 查看当前会话状态
+/agent   — 查看当前 Agent 类型
+/agent codex|claude — 切换 Agent 类型
+/new     — 清除上下文，开始新对话
+新对话    — 同 /new
+HELP
+)" || true
+                log "Command: /help"
+                continue
+                ;;
+            /status)
+                local session_id status_session status_timeout
+                session_id=$(get_session_id "$chat_id") || true
+                if [[ -n "$session_id" ]]; then
+                    local session_file="$SESSION_DIR/$chat_id"
+                    local ts
+                    ts=$(cut -d' ' -f1 "$session_file")
+                    local elapsed=$(( $(date +%s) - ts ))
+                    status_session="活跃（已持续 ${elapsed} 秒）\n会话 ID: ${session_id:0:16}..."
+                else
+                    status_session="无活跃会话"
+                fi
+                if (( SESSION_TIMEOUT == 0 )); then
+                    status_timeout="永不超时"
+                else
+                    status_timeout="${SESSION_TIMEOUT} 秒"
+                fi
+                reply_to_feishu "$chat_id" "$(printf '📊 当前状态：\nAgent 类型: %s\n会话状态: %b\n超时设置: %s' \
+                    "$AGENT_TYPE" "$status_session" "$status_timeout")" || true
+                log "Command: /status"
+                continue
+                ;;
+            /agent)
+                reply_to_feishu "$chat_id" "当前 Agent 类型: $AGENT_TYPE（可用: codex, claude）\n用法: /agent codex 或 /agent claude" || true
+                log "Command: /agent (query)"
+                continue
+                ;;
+            "/agent codex"|"/agent claude")
+                local new_agent="${prompt##/agent }"
+                if [[ "$new_agent" == "$AGENT_TYPE" ]]; then
+                    reply_to_feishu "$chat_id" "当前已经是 $AGENT_TYPE，无需切换。" || true
+                else
+                    AGENT_TYPE="$new_agent"
+                    clear_session "$chat_id"
+                    reply_to_feishu "$chat_id" "已切换到 $AGENT_TYPE，会话上下文已清除。" || true
+                    log "Agent switched to $AGENT_TYPE by chat $chat_id"
+                fi
+                continue
+                ;;
+            /new|新对话)
+                clear_session "$chat_id"
+                reply_to_feishu "$chat_id" "已开始新对话，之前的上下文已清除。" || true
+                log "Session cleared for $chat_id"
+                continue
+                ;;
+            /*)
+                reply_to_feishu "$chat_id" "未知命令: $prompt\n输入 /help 查看可用命令列表。" || true
+                log "Unknown command: $prompt"
+                continue
+                ;;
+        esac
 
         # Step 1: Add emoji reaction (working indicator)
         reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
