@@ -93,14 +93,16 @@ main() {
 
     lark-cli event +subscribe \
         --event-types "im.message.receive_v1" \
-        --compact \
-        --as bot | while IFS= read -r event; do
+        --as bot 2>/dev/null | while IFS= read -r event; do
 
-        # Parse event fields
-        chat_id=$(echo "$event" | jq -r '.event.message.chat_id // empty' 2>/dev/null)
-        message_id=$(echo "$event" | jq -r '.event.message.message_id // empty' 2>/dev/null)
-        msg_type=$(echo "$event" | jq -r '.event.message.message_type // empty' 2>/dev/null)
-        content_raw=$(echo "$event" | jq -r '.event.message.content // empty' 2>/dev/null)
+        # Debug: log raw event
+        log "Raw event: $(echo "$event" | head -c 500)"
+
+        # Parse event fields (try multiple possible paths)
+        chat_id=$(echo "$event" | jq -r '.event.message.chat_id // .chat_id // .message.chat_id // empty' 2>/dev/null)
+        message_id=$(echo "$event" | jq -r '.event.message.message_id // .message_id // .message.message_id // empty' 2>/dev/null)
+        msg_type=$(echo "$event" | jq -r '.event.message.message_type // .message_type // .message.message_type // empty' 2>/dev/null)
+        content_raw=$(echo "$event" | jq -r '.event.message.content // .content // .message.content // empty' 2>/dev/null)
 
         # Only handle text messages
         if [[ "$msg_type" != "text" ]]; then
