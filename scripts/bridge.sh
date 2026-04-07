@@ -16,7 +16,7 @@ CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 WORKING_EMOJI="${WORKING_EMOJI:-OnIt}"
 ERROR_EMOJI="${ERROR_EMOJI:-Frown}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
-SESSION_TIMEOUT="${SESSION_TIMEOUT:-600}"
+SESSION_TIMEOUT="${SESSION_TIMEOUT:-3600}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
 SESSION_DIR="${PROJECT_DIR}/.sessions"
 
@@ -250,6 +250,14 @@ main() {
         fi
 
         log "Received: $prompt (chat: $chat_id, msg: $message_id)"
+
+        # Handle special commands
+        if [[ "$prompt" == "新对话" || "$prompt" == "/new" ]]; then
+            clear_session "$chat_id"
+            reply_to_feishu "$chat_id" "已开始新对话，之前的上下文已清除。" || true
+            log "Session cleared for $chat_id"
+            continue
+        fi
 
         # Step 1: Add emoji reaction (working indicator)
         reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
