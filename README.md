@@ -51,6 +51,29 @@ cp .env.example .env
 ./scripts/bridge.sh
 ```
 
+## 可用命令
+
+在飞书聊天中向机器人发送以下命令：
+
+| 命令 | 说明 |
+|------|------|
+| `/help`（或 `帮助`） | 显示可用命令列表 |
+| `/status` | 查看当前会话状态（Agent 类型、会话时长、超时设置） |
+| `/agent` | 查看当前 Agent 类型 |
+| `/agent codex` 或 `/agent claude` | 切换 Agent 类型 |
+| `/new`（或 `新对话`） | 清除上下文，开始新对话 |
+
+以 `/` 开头的未知命令会被拦截并提示使用 `/help`。其他普通消息会直接转发给 AI Agent 处理。
+
+## 会话管理
+
+服务支持多轮对话上下文保持：
+
+- 每个飞书会话（chat_id）独立维护会话上下文
+- 上下文会持续保留直到超时或手动清除（发送 `/new`）
+- 切换 Agent 类型时会自动清除当前会话上下文
+- 超时时间通过 `SESSION_TIMEOUT` 配置，默认为 `0`（永不超时）
+
 ## 配置说明
 
 复制 `.env.example` 为 `.env` 并按需修改：
@@ -59,8 +82,20 @@ cp .env.example .env
 # AI Agent 类型：codex | claude
 AGENT_TYPE=codex
 
+# Codex CLI 命令（默认: codex）
+CODEX_CMD=codex
+
+# Claude Code 命令（默认: claude）
+CLAUDE_CMD=claude
+
 # 处理中显示的表情
 WORKING_EMOJI=OnIt
+
+# 出错时显示的表情
+ERROR_EMOJI=Frown
+
+# 会话超时（秒），0 表示永不超时
+SESSION_TIMEOUT=0
 
 # 日志文件路径
 LOG_FILE=./logs/bridge.log
