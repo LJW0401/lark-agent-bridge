@@ -91,6 +91,7 @@ reply_to_feishu() {
 # Main loop: subscribe to bot message events
 main() {
     log "=== lark-agent-bridge started ==="
+    log "Workspace: $(pwd)"
     log "Agent type: $AGENT_TYPE"
     log "Working emoji: $WORKING_EMOJI"
     log "Listening for Feishu bot messages..."
