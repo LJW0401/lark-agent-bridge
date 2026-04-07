@@ -38,14 +38,28 @@ add_reaction() {
     echo "$response" | jq -r '.data.reaction_id // empty' 2>/dev/null
 }
 
-# Remove emoji reaction from a message
+# Remove emoji reaction from a message (with retry)
 remove_reaction() {
     local message_id="$1"
     local reaction_id="$2"
+    local attempt=0
 
-    lark-cli im reactions delete \
-        --params "{\"message_id\":\"$message_id\",\"reaction_id\":\"$reaction_id\"}" \
-        --as bot 2>&1 >/dev/null || log "Failed to remove reaction"
+    while (( attempt < MAX_RETRIES )); do
+        local response
+        response=$(lark-cli im reactions delete \
+            --params "{\"message_id\":\"$message_id\",\"reaction_id\":\"$reaction_id\"}" \
+            --as bot 2>&1)
+
+        if echo "$response" | jq -e '.code == 0' &>/dev/null; then
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        log "Remove reaction failed (attempt $attempt/$MAX_RETRIES)"
+        sleep 2
+    done
+
+    log "Failed to remove reaction after $MAX_RETRIES attempts"
 }
 
 # Call AI agent with the given prompt
