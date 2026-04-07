@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # lark-agent-bridge: Listen for Feishu bot messages and forward to AI agent
-set -euo pipefail
+set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
@@ -46,7 +46,7 @@ add_reaction() {
         fi
 
         attempt=$((attempt + 1))
-        log "Add reaction failed (attempt $attempt/$MAX_RETRIES)"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Add reaction failed (attempt $attempt/$MAX_RETRIES)" >> "$LOG_FILE"
         sleep 2
     done
 }
