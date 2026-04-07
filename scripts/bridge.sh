@@ -16,9 +16,11 @@ CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 WORKING_EMOJI="${WORKING_EMOJI:-OnIt}"
 ERROR_EMOJI="${ERROR_EMOJI:-Frown}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
+SESSION_TIMEOUT="${SESSION_TIMEOUT:-600}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
+SESSION_DIR="${PROJECT_DIR}/.sessions"
 
-mkdir -p "$(dirname "$LOG_FILE")"
+mkdir -p "$(dirname "$LOG_FILE")" "$SESSION_DIR"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
@@ -75,9 +77,44 @@ remove_reaction() {
     log "Failed to remove reaction after $MAX_RETRIES attempts"
 }
 
+# Get or create session for a chat
+get_session_id() {
+    local chat_id="$1"
+    local session_file="$SESSION_DIR/$chat_id"
+
+    if [[ -f "$session_file" ]]; then
+        local timestamp session_id
+        timestamp=$(cut -d' ' -f1 "$session_file")
+        session_id=$(cut -d' ' -f2 "$session_file")
+        local now
+        now=$(date +%s)
+
+        # Check if session is still valid
+        if (( now - timestamp < SESSION_TIMEOUT )) && [[ -n "$session_id" ]]; then
+            echo "$session_id"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+# Save session id for a chat
+save_session_id() {
+    local chat_id="$1"
+    local session_id="$2"
+    echo "$(date +%s) $session_id" > "$SESSION_DIR/$chat_id"
+}
+
+# Clear session for a chat
+clear_session() {
+    local chat_id="$1"
+    rm -f "$SESSION_DIR/$chat_id"
+}
+
 # Call AI agent with the given prompt
 call_agent() {
     local prompt="$1"
+    local chat_id="$2"
     local result=""
 
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Calling $AGENT_TYPE..." >> "$LOG_FILE"
@@ -86,12 +123,44 @@ call_agent() {
         codex)
             local tmpfile
             tmpfile=$(mktemp /tmp/codex_out.XXXXXX)
-            $CODEX_CMD exec "$prompt" -o "$tmpfile" >/dev/null 2>&1 || true
+
+            local session_id
+            session_id=$(get_session_id "$chat_id") || true
+
+            local jsonfile
+            jsonfile=$(mktemp /tmp/codex_json.XXXXXX)
+
+            if [[ -n "$session_id" ]]; then
+                # Resume existing session
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resuming codex session: $session_id" >> "$LOG_FILE"
+                $CODEX_CMD exec resume "$session_id" "$prompt" -o "$tmpfile" --json > "$jsonfile" 2>/dev/null || true
+            else
+                # New session
+                $CODEX_CMD exec "$prompt" -o "$tmpfile" --json > "$jsonfile" 2>/dev/null || true
+            fi
+
             result=$(cat "$tmpfile" 2>/dev/null)
-            rm -f "$tmpfile"
+
+            # Extract session id (thread_id) from JSONL output
+            local new_session_id
+            new_session_id=$(grep -o '"thread_id":"[^"]*"' "$jsonfile" 2>/dev/null | head -1 | cut -d'"' -f4 || true)
+
+            if [[ -n "$new_session_id" ]]; then
+                save_session_id "$chat_id" "$new_session_id"
+                echo "[$(date '+%Y-%m-%d %H:%M:%S')] Saved session: $new_session_id for chat: $chat_id" >> "$LOG_FILE"
+            fi
+
+            rm -f "$tmpfile" "$jsonfile"
             ;;
         claude)
-            result=$($CLAUDE_CMD -p "$prompt" 2>/dev/null) || true
+            local session_id
+            session_id=$(get_session_id "$chat_id") || true
+
+            if [[ -n "$session_id" ]]; then
+                result=$($CLAUDE_CMD -p "$prompt" --resume "$session_id" 2>/dev/null) || true
+            else
+                result=$($CLAUDE_CMD -p "$prompt" 2>/dev/null) || true
+            fi
             ;;
         *)
             result="Unknown agent type: $AGENT_TYPE"
@@ -186,8 +255,8 @@ main() {
         reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
         log "Added reaction: $reaction_id"
 
-        # Step 2: Call AI agent
-        result=$(call_agent "$prompt")
+        # Step 2: Call AI agent (with session context)
+        result=$(call_agent "$prompt" "$chat_id")
         log "Agent response: ${result:0:200}..."
 
         # Step 3: Check result and reply
