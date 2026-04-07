@@ -16,7 +16,7 @@ CLAUDE_CMD="${CLAUDE_CMD:-claude}"
 WORKING_EMOJI="${WORKING_EMOJI:-OnIt}"
 ERROR_EMOJI="${ERROR_EMOJI:-Frown}"
 MAX_RETRIES="${MAX_RETRIES:-3}"
-SESSION_TIMEOUT="${SESSION_TIMEOUT:-3600}"
+SESSION_TIMEOUT="${SESSION_TIMEOUT:-0}"
 LOG_FILE="${LOG_FILE:-$PROJECT_DIR/logs/bridge.log}"
 SESSION_DIR="${PROJECT_DIR}/.sessions"
 
@@ -89,8 +89,8 @@ get_session_id() {
         local now
         now=$(date +%s)
 
-        # Check if session is still valid
-        if (( now - timestamp < SESSION_TIMEOUT )) && [[ -n "$session_id" ]]; then
+        # Check if session is still valid (0 = no timeout)
+        if (( SESSION_TIMEOUT == 0 || now - timestamp < SESSION_TIMEOUT )) && [[ -n "$session_id" ]]; then
             echo "$session_id"
             return 0
         fi
