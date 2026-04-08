@@ -27,6 +27,9 @@ QUEUE_DIR="${PROJECT_DIR}/.queue"
 
 mkdir -p "$(dirname "$LOG_FILE")" "$SESSION_DIR" "$PID_DIR" "$QUEUE_DIR"
 
+# Reset stale state from previous run (depth counters, PID files)
+rm -f "$QUEUE_DIR"/*.depth "$PID_DIR"/*
+
 # Clean up all child processes on exit (runs only once)
 cleanup() {
     trap - EXIT TERM INT  # Prevent re-entry from cascading signals
@@ -370,11 +373,11 @@ reply_to_feishu() {
         fi
 
         attempt=$((attempt + 1))
-        log "Reply failed (attempt $attempt/$MAX_RETRIES): $(echo "$response" | head -c 200)"
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] Reply failed (attempt $attempt/$MAX_RETRIES): $(echo "$response" | head -c 200)" >> "$LOG_FILE"
         sleep 2
     done
 
-    log "Reply failed after $MAX_RETRIES attempts"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Reply failed after $MAX_RETRIES attempts" >> "$LOG_FILE"
     return 1
 }
 
