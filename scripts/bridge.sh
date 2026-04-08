@@ -23,8 +23,9 @@ LOG_FILE="$(cd "$PROJECT_DIR" && realpath -m "${LOG_FILE:-./logs/bridge.log}")"
 SESSION_DIR="${PROJECT_DIR}/.sessions"
 WORKSPACE_DIR="${WORKSPACE_DIR:-$PROJECT_DIR}"
 PID_DIR="${PROJECT_DIR}/.pids"
+QUEUE_DIR="${PROJECT_DIR}/.queue"
 
-mkdir -p "$(dirname "$LOG_FILE")" "$SESSION_DIR" "$PID_DIR"
+mkdir -p "$(dirname "$LOG_FILE")" "$SESSION_DIR" "$PID_DIR" "$QUEUE_DIR"
 
 # Clean up all child processes on exit
 cleanup() {
@@ -248,8 +249,9 @@ start_agent() {
             (
                 cd "$workspace"
                 if [[ -n "$session_id" ]]; then
+                    # Resume: no --json/-o, stream text via stdout for real-time updates
                     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resuming codex session: $session_id" >> "$LOG_FILE"
-                    $CODEX_CMD exec $CODEX_SKIP_CHECK resume "$session_id" "$prompt" -o "$outfile" --json > "$jsonfile" 2>/dev/null || true
+                    stdbuf -oL $CODEX_CMD exec $CODEX_SKIP_CHECK resume "$session_id" "$prompt" > "$outfile" 2>/dev/null || true
                     # Fallback to new session if resume produced empty output
                     if [[ ! -s "$outfile" ]]; then
                         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resume failed, starting new codex session" >> "$LOG_FILE"
@@ -257,6 +259,7 @@ start_agent() {
                         $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt" -o "$outfile" --json > "$jsonfile" 2>/dev/null || true
                     fi
                 else
+                    # New session: use --json to capture thread_id for future resume
                     $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt" -o "$outfile" --json > "$jsonfile" 2>/dev/null || true
                 fi
             ) &
@@ -269,15 +272,15 @@ start_agent() {
             (
                 cd "$workspace"
                 if [[ -n "$session_id" ]]; then
-                    $CLAUDE_CMD -p "$prompt" --resume "$session_id" > "$outfile" 2>/dev/null || true
+                    stdbuf -oL $CLAUDE_CMD -p "$prompt" --resume "$session_id" > "$outfile" 2>/dev/null || true
                     # Fallback to new session if resume produced empty output
                     if [[ ! -s "$outfile" ]]; then
                         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resume failed, starting new claude session" >> "$LOG_FILE"
                         rm -f "$outfile"
-                        $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
+                        stdbuf -oL $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
                     fi
                 else
-                    $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
+                    stdbuf -oL $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
                 fi
             ) &
             AGENT_PID=$!
@@ -411,6 +414,43 @@ reply_error_to_feishu() {
 
     # Send error message
     send_to_feishu "$chat_id" "[错误] $error_msg" || true
+}
+
+# Enqueue a message for processing (per-chat serial, cross-chat parallel)
+enqueue_message() {
+    local prompt="$1"
+    local chat_id="$2"
+    local message_id="$3"
+    local depth_file="$QUEUE_DIR/${chat_id}.depth"
+
+    # Track queue depth: increment before spawning (main loop is single-threaded, no race)
+    local depth=0
+    [[ -f "$depth_file" ]] && depth=$(cat "$depth_file" 2>/dev/null || echo 0)
+    echo $((depth + 1)) > "$depth_file"
+
+    # If there are already messages being processed/queued, show waiting indicator
+    local queued_reaction_id=""
+    if (( depth > 0 )); then
+        queued_reaction_id=$(add_reaction "$message_id" "OneSecond")
+        log "Message queued for busy chat $chat_id (depth: $((depth + 1)))"
+    fi
+
+    # Run in background with per-chat lock (serializes within same chat)
+    (
+        flock -w 600 9 || { log "Queue timeout for chat $chat_id"; return 1; }
+
+        # Remove queued indicator now that we're starting
+        if [[ -n "$queued_reaction_id" ]]; then
+            remove_reaction "$message_id" "$queued_reaction_id" 2>/dev/null || true
+        fi
+
+        process_message "$prompt" "$chat_id" "$message_id"
+
+        # Decrement queue depth (inside flock, so no race between subshells)
+        local d
+        d=$(cat "$depth_file" 2>/dev/null || echo 1)
+        echo $((d - 1)) > "$depth_file"
+    ) 9>"$QUEUE_DIR/${chat_id}.lock" &
 }
 
 # Process a message: run agent with streaming reply (runs in background)
@@ -646,8 +686,8 @@ HELP
                 ;;
         esac
 
-        # Process message in background (allows main loop to handle /cancel etc.)
-        process_message "$prompt" "$chat_id" "$message_id" &
+        # Enqueue message (per-chat serial, cross-chat parallel)
+        enqueue_message "$prompt" "$chat_id" "$message_id"
 
     done
 
