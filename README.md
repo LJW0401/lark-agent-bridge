@@ -13,13 +13,16 @@
 lark-cli 事件订阅（WebSocket）
         │
         ▼
-解析消息内容，添加表情表示正在处理
+消息队列（同一会话串行，跨会话并行）
+        │
+        ▼
+解析消息 → 添加表情 → 创建占位回复
         │
         ▼
 Codex CLI / Claude Code（无头模式）
-        │
+        │（实时轮询输出，更新回复消息）
         ▼
-将处理结果回复到飞书，移除表情
+最终结果渲染为 Markdown 富文本回复，移除表情
 ```
 
 ## 前置要求
@@ -58,10 +61,13 @@ cp .env.example .env
 | 命令 | 说明 |
 |------|------|
 | `/help`（或 `帮助`） | 显示可用命令列表 |
-| `/status` | 查看当前会话状态（Agent 类型、会话时长、超时设置） |
+| `/status` | 查看当前会话状态（Agent 类型、工作目录、会话时长、超时设置） |
 | `/agent` | 查看当前 Agent 类型 |
 | `/agent codex` 或 `/agent claude` | 切换 Agent 类型 |
-| `/new`（或 `新对话`） | 清除上下文，开始新对话 |
+| `/workspace` | 查看当前工作目录 |
+| `/workspace <path>` | 切换 Agent 工作目录 |
+| `/cancel` | 取消正在进行的请求 |
+| `/new`（或 `新对话`） | 创建新会话，开始新对话 |
 
 以 `/` 开头的未知命令会被拦截并提示使用 `/help`。其他普通消息会直接转发给 AI Agent 处理。
 
@@ -97,6 +103,12 @@ ERROR_EMOJI=Frown
 # 会话超时（秒），0 表示永不超时
 SESSION_TIMEOUT=0
 
+# 流式更新轮询间隔（秒）
+STREAM_INTERVAL=3
+
+# Agent 默认工作目录
+WORKSPACE_DIR=.
+
 # 日志文件路径
 LOG_FILE=./logs/bridge.log
 ```
@@ -127,6 +139,7 @@ LOG_FILE=./logs/bridge.log
 ```
 lark-agent-bridge/
 ├── README.md               # 项目说明
+├── TODO.md                 # 功能规划清单
 ├── .env.example            # 配置模板
 ├── .gitignore
 ├── scripts/
