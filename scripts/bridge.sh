@@ -430,16 +430,20 @@ enqueue_message() {
     [[ -f "$depth_file" ]] && depth=$(cat "$depth_file" 2>/dev/null || echo 0)
     echo $((depth + 1)) > "$depth_file"
 
-    # If there are already messages being processed/queued, show waiting indicator
-    local queued_reaction_id=""
-    if (( depth > 0 )); then
-        queued_reaction_id=$(add_reaction "$message_id" "OneSecond")
-        log "Message queued for busy chat $chat_id (depth: $((depth + 1)))"
-    fi
+    local is_queued=$( (( depth > 0 )) && echo 1 || echo 0 )
 
     # Run in background with per-chat lock (serializes within same chat)
+    # All API calls (reactions, etc.) happen inside the subshell to avoid blocking main loop
     (
         trap - EXIT TERM INT  # Don't inherit parent's cleanup trap
+
+        # Show waiting indicator if queued (non-blocking to main loop)
+        local queued_reaction_id=""
+        if (( is_queued )); then
+            queued_reaction_id=$(add_reaction "$message_id" "OneSecond")
+            log "Message queued for busy chat $chat_id (depth: $((depth + 1)))"
+        fi
+
         flock -w 600 9 || { log "Queue timeout for chat $chat_id"; return 1; }
 
         # Remove queued indicator now that we're starting
