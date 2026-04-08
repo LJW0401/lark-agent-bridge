@@ -524,6 +524,7 @@ process_message() {
         elif [[ -z "$current_content" && -n "$reply_msg_id" ]]; then
             # No output yet — show elapsed time so user knows it's still working
             update_message "$reply_msg_id" "⏳ 正在处理...（已等待 ${elapsed} 秒）"
+            log "Progress: waiting ${elapsed}s (PID: $AGENT_PID)"
         fi
     done
 
