@@ -250,19 +250,40 @@ start_agent() {
             (
                 trap - EXIT TERM INT
                 cd "$workspace"
+
+                run_codex_json() {
+                    # Run codex with --json, parse JSONL events in real-time:
+                    # - Extract text from item.completed events → outfile (for streaming display)
+                    # - Save thread_id from thread.started → jsonfile (for session tracking)
+                    "$@" --json 2>/dev/null | while IFS= read -r line; do
+                        local evt_type
+                        evt_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null) || continue
+                        case "$evt_type" in
+                            thread.started)
+                                echo "$line" >> "$jsonfile"
+                                ;;
+                            item.completed)
+                                local text
+                                text=$(echo "$line" | jq -r '.item.text // empty' 2>/dev/null) || true
+                                if [[ -n "$text" ]]; then
+                                    printf '%s\n' "$text" >> "$outfile"
+                                fi
+                                ;;
+                        esac
+                    done || true
+                }
+
                 if [[ -n "$session_id" ]]; then
-                    # Resume: no --json/-o, stream text via stdout for real-time updates
                     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resuming codex session: $session_id" >> "$LOG_FILE"
-                    stdbuf -oL $CODEX_CMD exec $CODEX_SKIP_CHECK resume "$session_id" "$prompt" > "$outfile" 2>/dev/null || true
+                    run_codex_json $CODEX_CMD exec $CODEX_SKIP_CHECK resume "$session_id" "$prompt"
                     # Fallback to new session if resume produced empty output
                     if [[ ! -s "$outfile" ]]; then
                         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resume failed, starting new codex session" >> "$LOG_FILE"
                         rm -f "$outfile" "$jsonfile"
-                        $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt" -o "$outfile" --json > "$jsonfile" 2>/dev/null || true
+                        run_codex_json $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt"
                     fi
                 else
-                    # New session: use --json to capture thread_id for future resume
-                    $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt" -o "$outfile" --json > "$jsonfile" 2>/dev/null || true
+                    run_codex_json $CODEX_CMD exec $CODEX_SKIP_CHECK "$prompt"
                 fi
             ) &
             AGENT_PID=$!
