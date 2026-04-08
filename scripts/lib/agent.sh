@@ -32,15 +32,17 @@ create_new_session() {
             return 1
             ;;
         claude)
-            local tmpfile
-            tmpfile=$(mktemp /tmp/claude_out.XXXXXX)
+            local jsonfile
+            jsonfile=$(mktemp /tmp/claude_json.XXXXXX)
 
-            (cd "$workspace" && $CLAUDE_CMD -p "你好" > "$tmpfile") 2>>"$LOG_FILE" || true
+            (cd "$workspace" && $CLAUDE_CMD -p "你好" --output-format json > "$jsonfile" < /dev/null) 2>>"$LOG_FILE" || true
+
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] create_new_session(claude): $(head -c 200 "$jsonfile" 2>/dev/null)" >> "$LOG_FILE"
 
             local session_id
-            session_id=$($CLAUDE_CMD --session-id 2>/dev/null || true)
+            session_id=$(jq -r '.session_id // empty' "$jsonfile" 2>/dev/null || true)
 
-            rm -f "$tmpfile"
+            rm -f "$jsonfile"
 
             if [[ -n "$session_id" ]]; then
                 save_session_id "$chat_id" "$session_id"
@@ -111,18 +113,43 @@ start_agent() {
             local session_id
             session_id=$(get_session_id "$chat_id") || true
 
+            local jsonfile="${outfile}.json"
+
             (
                 trap - EXIT TERM INT
                 cd "$workspace"
+
+                run_claude() {
+                    # Run claude with --output-format json, extract text result to outfile
+                    # and session_id to jsonfile for session tracking
+                    "$@" --output-format json < /dev/null 2>/dev/null | {
+                        local full_json
+                        full_json=$(cat)
+                        # Extract result text
+                        local text
+                        text=$(echo "$full_json" | jq -r '.result // empty' 2>/dev/null) || true
+                        if [[ -n "$text" ]]; then
+                            printf '%s' "$text" > "$outfile"
+                        fi
+                        # Save session_id for future resume
+                        local sid
+                        sid=$(echo "$full_json" | jq -r '.session_id // empty' 2>/dev/null) || true
+                        if [[ -n "$sid" ]]; then
+                            echo "$sid" > "$jsonfile"
+                        fi
+                    } || true
+                }
+
                 if [[ -n "$session_id" ]]; then
-                    $CLAUDE_CMD -p "$prompt" --resume "$session_id" > "$outfile" 2>/dev/null || true
+                    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resuming claude session: $session_id" >> "$LOG_FILE"
+                    run_claude $CLAUDE_CMD -p "$prompt" --resume "$session_id"
                     if [[ ! -s "$outfile" ]]; then
                         echo "[$(date '+%Y-%m-%d %H:%M:%S')] Resume failed, starting new claude session" >> "$LOG_FILE"
-                        rm -f "$outfile"
-                        $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
+                        rm -f "$outfile" "$jsonfile"
+                        run_claude $CLAUDE_CMD -p "$prompt"
                     fi
                 else
-                    $CLAUDE_CMD -p "$prompt" > "$outfile" 2>/dev/null || true
+                    run_claude $CLAUDE_CMD -p "$prompt"
                 fi
             ) &
             AGENT_PID=$!

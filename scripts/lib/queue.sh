@@ -106,10 +106,23 @@ process_message() {
 
     clear_agent_pid "$chat_id"
 
-    # Save session for codex
-    if [[ "$AGENT_TYPE" == "codex" ]]; then
-        save_codex_session "$chat_id" "${outfile}.json"
-    fi
+    # Save session id for future resume
+    case "$AGENT_TYPE" in
+        codex)
+            save_codex_session "$chat_id" "${outfile}.json"
+            ;;
+        claude)
+            if [[ -f "${outfile}.json" ]]; then
+                local claude_sid
+                claude_sid=$(cat "${outfile}.json" 2>/dev/null)
+                if [[ -n "$claude_sid" ]]; then
+                    save_session_id "$chat_id" "$claude_sid"
+                    log "Saved claude session: $claude_sid for chat: $chat_id"
+                fi
+                rm -f "${outfile}.json"
+            fi
+            ;;
+    esac
 
     # Step 4: Final update with complete result
     local result
