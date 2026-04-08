@@ -27,8 +27,9 @@ QUEUE_DIR="${PROJECT_DIR}/.queue"
 
 mkdir -p "$(dirname "$LOG_FILE")" "$SESSION_DIR" "$PID_DIR" "$QUEUE_DIR"
 
-# Clean up all child processes on exit
+# Clean up all child processes on exit (runs only once)
 cleanup() {
+    trap - EXIT TERM INT  # Prevent re-entry from cascading signals
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Cleaning up child processes..." >> "$LOG_FILE"
     kill 0 2>/dev/null || true
 }
