@@ -488,18 +488,17 @@ process_message() {
     local chat_id="$2"
     local message_id="$3"
 
-    # Step 1: Add emoji reaction (working indicator)
-    local reaction_id
-    reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
-    log "Added reaction: $reaction_id"
-
-    # Step 2: Start agent in background
+    # Step 1: Start agent immediately (don't wait for API calls)
     local outfile
     outfile=$(mktemp /tmp/agent_out.XXXXXX)
     AGENT_PID=""
     start_agent "$prompt" "$chat_id" "$outfile"
 
-    # Step 3: Create placeholder reply and stream updates
+    # Step 2: Add emoji reaction and create placeholder reply (while agent is already running)
+    local reaction_id
+    reaction_id=$(add_reaction "$message_id" "$WORKING_EMOJI")
+    log "Added reaction: $reaction_id"
+
     local reply_msg_id=""
     local last_content=""
 
@@ -512,14 +511,19 @@ process_message() {
     fi
 
     # Poll agent output and update message
+    local elapsed=0
     while [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null; do
         sleep "$STREAM_INTERVAL"
+        elapsed=$((elapsed + STREAM_INTERVAL))
         local current_content
         current_content=$(cat "$outfile" 2>/dev/null || true)
         if [[ -n "$current_content" && "$current_content" != "$last_content" && -n "$reply_msg_id" ]]; then
             update_message "$reply_msg_id" "${current_content:0:3997}..."
             last_content="$current_content"
             log "Stream update: ${current_content:0:100}..."
+        elif [[ -z "$current_content" && -n "$reply_msg_id" ]]; then
+            # No output yet — show elapsed time so user knows it's still working
+            update_message "$reply_msg_id" "⏳ 正在处理...（已等待 ${elapsed} 秒）"
         fi
     done
 
