@@ -56,6 +56,14 @@ main() {
 
         log "Received: $prompt (chat: $chat_id, msg: $message_id)"
 
+        # Escape prefix: // → strip first / and send to agent directly
+        if [[ "$prompt" == //* ]]; then
+            prompt="${prompt:1}"
+            log "Escaped command prefix: $prompt"
+            enqueue_message "$prompt" "$chat_id" "$message_id"
+            continue
+        fi
+
         # Handle commands; if not a command, enqueue for agent processing
         if ! handle_command "$prompt" "$chat_id" "$message_id"; then
             enqueue_message "$prompt" "$chat_id" "$message_id"

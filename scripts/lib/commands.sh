@@ -20,6 +20,8 @@ handle_command() {
 /cancel     — 取消正在进行的请求
 /new        — 清除上下文，开始新对话
 新对话       — 同 /new
+
+💡 以 // 开头可将 / 命令发给 Agent，如 //help
 HELP
 )" || true
             log "Command: /help"
