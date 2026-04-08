@@ -247,6 +247,7 @@ start_agent() {
             local jsonfile="${outfile}.json"
 
             (
+                trap - EXIT TERM INT
                 cd "$workspace"
                 if [[ -n "$session_id" ]]; then
                     # Resume: no --json/-o, stream text via stdout for real-time updates
@@ -270,6 +271,7 @@ start_agent() {
             session_id=$(get_session_id "$chat_id") || true
 
             (
+                trap - EXIT TERM INT
                 cd "$workspace"
                 if [[ -n "$session_id" ]]; then
                     stdbuf -oL $CLAUDE_CMD -p "$prompt" --resume "$session_id" > "$outfile" 2>/dev/null || true
@@ -437,6 +439,7 @@ enqueue_message() {
 
     # Run in background with per-chat lock (serializes within same chat)
     (
+        trap - EXIT TERM INT  # Don't inherit parent's cleanup trap
         flock -w 600 9 || { log "Queue timeout for chat $chat_id"; return 1; }
 
         # Remove queued indicator now that we're starting
