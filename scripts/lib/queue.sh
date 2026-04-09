@@ -1,9 +1,42 @@
 #!/usr/bin/env bash
 # queue.sh — 消息队列和消息处理
 
+queue_depth_lock_file() {
+    local chat_id="$1"
+    echo "$QUEUE_DIR/${chat_id}.depth.lock"
+}
+
+increment_queue_depth() {
+    local depth_file="$1"
+    local depth_lock="$2"
+    local lock_fd depth
+
+    exec {lock_fd}>"$depth_lock"
+    if ! flock -w 5 "$lock_fd"; then
+        log "Failed to acquire queue depth lock: $depth_file"
+        exec {lock_fd}>&-
+        return 1
+    fi
+
+    depth=$(cat "$depth_file" 2>/dev/null || echo 0)
+    echo $((depth + 1)) > "$depth_file"
+
+    exec {lock_fd}>&-
+    echo "$depth"
+}
+
 decrement_queue_depth() {
     local depth_file="$1"
-    local d
+    local depth_lock="$2"
+    local lock_fd d
+
+    exec {lock_fd}>"$depth_lock"
+    if ! flock -w 5 "$lock_fd"; then
+        log "Failed to acquire queue depth lock: $depth_file"
+        exec {lock_fd}>&-
+        return 1
+    fi
+
     d=$(cat "$depth_file" 2>/dev/null || echo 1)
     d=$((d - 1))
     if (( d > 0 )); then
@@ -11,6 +44,8 @@ decrement_queue_depth() {
     else
         rm -f "$depth_file"
     fi
+
+    exec {lock_fd}>&-
 }
 
 # Enqueue a message for processing (per-chat serial, cross-chat parallel)
@@ -19,13 +54,18 @@ enqueue_message() {
     local chat_id="$2"
     local message_id="$3"
     local depth_file="$QUEUE_DIR/${chat_id}.depth"
+    local depth_lock
+    depth_lock=$(queue_depth_lock_file "$chat_id")
     local task_id
     task_id=$(task_create "$chat_id" "$message_id")
 
-    # Track queue depth: increment before spawning (main loop is single-threaded, no race)
+    # Track queue depth under a dedicated lock so increments don't race with async decrements
     local depth=0
-    [[ -f "$depth_file" ]] && depth=$(cat "$depth_file" 2>/dev/null || echo 0)
-    echo $((depth + 1)) > "$depth_file"
+    if ! depth=$(increment_queue_depth "$depth_file" "$depth_lock"); then
+        task_transition "$task_id" failed "队列计数更新失败"
+        log "Failed to increment queue depth for chat $chat_id"
+        return 1
+    fi
 
     local is_queued=$( (( depth > 0 )) && echo 1 || echo 0 )
 
@@ -45,7 +85,7 @@ enqueue_message() {
 
         if ! flock -w 600 9; then
             task_transition "$task_id" failed "队列等待超时"
-            decrement_queue_depth "$depth_file"
+            decrement_queue_depth "$depth_file" "$depth_lock"
             log "Queue timeout for chat $chat_id"
             return 1
         fi
@@ -58,8 +98,7 @@ enqueue_message() {
 
         process_message "$prompt" "$chat_id" "$message_id" "$task_id"
 
-        # Decrement queue depth (inside flock, so no race between subshells)
-        decrement_queue_depth "$depth_file"
+        decrement_queue_depth "$depth_file" "$depth_lock"
     ) 9>"$QUEUE_DIR/${chat_id}.lock" &
 }
 
