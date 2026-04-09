@@ -10,6 +10,11 @@ task_file() {
     echo "$TASK_DIR/${task_id}.json"
 }
 
+task_lock_file() {
+    local task_id="$1"
+    echo "$TASK_DIR/${task_id}.lock"
+}
+
 task_current_file() {
     local chat_id="$1"
     echo "$TASK_DIR/${chat_id}.current"
@@ -28,30 +33,50 @@ task_read_field() {
 task_write_json() {
     local task_id="$1"
     local content="$2"
-    local file tmp
+    local file tmp lock_file lock_fd
     file=$(task_file "$task_id")
     tmp="${file}.tmp"
+    lock_file=$(task_lock_file "$task_id")
+
+    exec {lock_fd}>"$lock_file"
+    if ! flock -w 5 "$lock_fd"; then
+        log "Failed to acquire task lock for $task_id"
+        exec {lock_fd}>&-
+        return 1
+    fi
 
     printf '%s\n' "$content" > "$tmp"
     mv "$tmp" "$file"
+    exec {lock_fd}>&-
 }
 
 task_update_json() {
     local task_id="$1"
     local filter="$2"
     shift 2
-    local file tmp content
+    local file tmp content lock_file lock_fd
     file=$(task_file "$task_id")
     tmp="${file}.tmp"
+    lock_file=$(task_lock_file "$task_id")
+
+    exec {lock_fd}>"$lock_file"
+    if ! flock -w 5 "$lock_fd"; then
+        log "Failed to acquire task lock for $task_id"
+        exec {lock_fd}>&-
+        return 1
+    fi
+
     content=$(cat "$file" 2>/dev/null || echo '{}')
 
     if ! printf '%s\n' "$content" | jq "$filter" "$@" > "$tmp" 2>/dev/null; then
         rm -f "$tmp"
         log "Failed to update task state for $task_id with filter: $filter"
+        exec {lock_fd}>&-
         return 1
     fi
 
     mv "$tmp" "$file"
+    exec {lock_fd}>&-
 }
 
 task_generate_id() {
