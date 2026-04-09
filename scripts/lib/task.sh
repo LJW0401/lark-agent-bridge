@@ -156,33 +156,64 @@ task_transition() {
     local task_id="$1"
     local new_state="$2"
     local reason="${3:-}"
-    local current_state
-    current_state=$(task_read_field "$task_id" state)
+    local file tmp lock_file lock_fd content current_state
+    file=$(task_file "$task_id")
+    tmp="${file}.tmp"
+    lock_file=$(task_lock_file "$task_id")
+
+    exec {lock_fd}>"$lock_file"
+    if ! flock -w 5 "$lock_fd"; then
+        log "Failed to acquire task transition lock for $task_id"
+        exec {lock_fd}>&-
+        return 1
+    fi
+
+    content=$(cat "$file" 2>/dev/null || echo '{}')
+    current_state=$(printf '%s\n' "$content" | jq -r '.state // empty' 2>/dev/null)
 
     if [[ -z "$current_state" ]]; then
         log "Task $task_id has no current state; cannot transition to $new_state"
+        exec {lock_fd}>&-
         return 1
     fi
 
     if [[ "$current_state" == "$new_state" ]]; then
-        task_set_field "$task_id" state "$new_state"
-        if [[ -n "$reason" ]]; then
-            task_set_field "$task_id" note "$reason"
+        if ! printf '%s\n' "$content" | jq '.state = $state
+            | .updated_at = $now
+            | if $reason == "" then del(.note) else .note = $reason end' \
+            --arg state "$new_state" \
+            --arg reason "$reason" \
+            --argjson now "$(task_now)" > "$tmp" 2>/dev/null; then
+            rm -f "$tmp"
+            log "Failed to rewrite task state for $task_id"
+            exec {lock_fd}>&-
+            return 1
         fi
+        mv "$tmp" "$file"
+        exec {lock_fd}>&-
         return 0
     fi
 
     if ! task_transition_allowed "$current_state" "$new_state"; then
         log "Invalid task transition for $task_id: $current_state -> $new_state"
+        exec {lock_fd}>&-
         return 1
     fi
 
-    task_update_json "$task_id" '.state = $state
+    if ! printf '%s\n' "$content" | jq '.state = $state
         | .updated_at = $now
         | if $reason == "" then del(.note) else .note = $reason end' \
         --arg state "$new_state" \
         --arg reason "$reason" \
-        --argjson now "$(task_now)"
+        --argjson now "$(task_now)" > "$tmp" 2>/dev/null; then
+        rm -f "$tmp"
+        log "Failed to transition task state for $task_id"
+        exec {lock_fd}>&-
+        return 1
+    fi
+
+    mv "$tmp" "$file"
+    exec {lock_fd}>&-
 }
 
 task_set_current() {
