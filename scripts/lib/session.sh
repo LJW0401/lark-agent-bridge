@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# session.sh — 会话管理（session、workspace、PID 跟踪）
+# session.sh — 会话管理（session、workspace、任务取消）
 
 # Get or create session for a chat
 get_session_id() {
@@ -70,38 +70,36 @@ set_agent_type() {
     echo "$agent_type" > "$SESSION_DIR/${chat_id}.agent_type"
 }
 
-# Save agent PID and reply message id for a chat (for /cancel)
-save_agent_pid() {
-    local chat_id="$1"
-    local pid="$2"
-    local reply_msg_id="${3:-}"
-    echo "$pid $reply_msg_id" > "$PID_DIR/$chat_id"
-}
-
-# Clear agent PID for a chat
-clear_agent_pid() {
-    local chat_id="$1"
-    rm -f "$PID_DIR/$chat_id"
-}
-
 # Cancel running agent for a chat
 cancel_agent() {
     local chat_id="$1"
-    local pid_file="$PID_DIR/$chat_id"
-    if [[ -f "$pid_file" ]]; then
-        local pid reply_msg_id
-        pid=$(cut -d' ' -f1 "$pid_file")
-        reply_msg_id=$(cut -d' ' -f2 "$pid_file")
-        clear_agent_pid "$chat_id"
-        # Kill the agent process
-        if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-            kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
-        fi
-        # Update the streaming reply to show cancellation
-        if [[ -n "$reply_msg_id" ]]; then
-            update_message "$reply_msg_id" "[已取消] 请求已被用户中断。"
-        fi
-        return 0
+    local task_id state pid reply_msg_id
+    task_id=$(task_get_current "$chat_id") || return 1
+    state=$(task_read_field "$task_id" state)
+
+    case "$state" in
+        queued|starting|running|cancelling)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    task_transition "$task_id" cancelling "用户请求取消" || return 1
+
+    pid=$(task_read_field "$task_id" agent_pid)
+    reply_msg_id=$(task_read_field "$task_id" reply_message_id)
+
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        kill -- -"$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+    else
+        task_transition "$task_id" cancelled "任务在启动前被取消" || true
+        task_clear_current "$chat_id" "$task_id"
     fi
-    return 1
+
+    if [[ -n "$reply_msg_id" ]]; then
+        update_message "$reply_msg_id" "[已取消] 请求已被用户中断。"
+    fi
+
+    return 0
 }

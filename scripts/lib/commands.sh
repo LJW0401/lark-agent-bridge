@@ -44,11 +44,12 @@ HELP
             else
                 status_timeout="${SESSION_TIMEOUT} 秒"
             fi
-            local workspace current_agent
+            local workspace current_agent task_status
             workspace=$(get_workspace "$chat_id")
             current_agent=$(get_agent_type "$chat_id")
-            send_to_feishu "$chat_id" "$(printf '📊 当前状态：\nAgent 类型: %s\n工作目录: %s\n会话状态: %b\n超时设置: %s' \
-                "$current_agent" "$workspace" "$status_session" "$status_timeout")" || true
+            task_status=$(task_runtime_summary "$chat_id" || echo "当前任务: 无运行中任务")
+            send_to_feishu "$chat_id" "$(printf '📊 当前状态：\nAgent 类型: %s\n工作目录: %s\n会话状态: %b\n超时设置: %s\n%s' \
+                "$current_agent" "$workspace" "$status_session" "$status_timeout" "$task_status")" || true
             log "Command: /status"
             return 0
             ;;

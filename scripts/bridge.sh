@@ -14,6 +14,7 @@ fi
 # Load modules (order matters: config first, then dependencies before dependents)
 source "$LIB_DIR/config.sh"    # 环境变量、日志、cleanup
 source "$LIB_DIR/feishu.sh"    # 飞书 API（被 session/agent/queue/commands 依赖）
+source "$LIB_DIR/task.sh"      # 显式任务状态机
 source "$LIB_DIR/session.sh"   # 会话管理（被 agent/commands 依赖）
 source "$LIB_DIR/agent.sh"     # Agent 调用（被 queue 依赖）
 source "$LIB_DIR/queue.sh"     # 消息队列和处理
@@ -21,10 +22,16 @@ source "$LIB_DIR/commands.sh"  # 斜杠命令
 
 # Main loop: subscribe to bot message events
 main() {
+    local latest_change
+    latest_change=$(project_latest_change 2>/dev/null || true)
+
     log "=== lark-agent-bridge started ==="
     log "Workspace: $(pwd)"
     log "Agent type: $AGENT_TYPE"
     log "Working emoji: $WORKING_EMOJI"
+    if [[ -n "$latest_change" ]]; then
+        log "Latest project change: $latest_change"
+    fi
     log "Listening for Feishu bot messages..."
 
     lark-cli event +subscribe \
