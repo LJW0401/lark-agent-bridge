@@ -5,3 +5,4 @@ node_modules/
 .sessions/
 .pids/
 .queue/
+.worktrees/
