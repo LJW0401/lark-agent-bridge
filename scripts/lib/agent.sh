@@ -4,16 +4,17 @@
 # Create a new agent session for a chat (synchronous, used by /new)
 create_new_session() {
     local chat_id="$1"
-    local workspace
+    local workspace agent_type
     workspace=$(get_workspace "$chat_id")
+    agent_type=$(get_agent_type "$chat_id")
 
-    case "$AGENT_TYPE" in
+    case "$agent_type" in
         codex)
             local tmpfile jsonfile
             tmpfile=$(mktemp /tmp/codex_out.XXXXXX)
             jsonfile=$(mktemp /tmp/codex_json.XXXXXX)
 
-            (cd "$workspace" && $CODEX_CMD exec $CODEX_SKIP_CHECK "你好" -o "$tmpfile" --json > "$jsonfile") 2>>"$LOG_FILE" || true
+            (cd "$workspace" && $CODEX_CMD exec $CODEX_SKIP_CHECK "你好" -o "$tmpfile" --json < /dev/null > "$jsonfile") 2>>"$LOG_FILE" || true
 
             echo "[$(date '+%Y-%m-%d %H:%M:%S')] create_new_session: jsonfile=$(head -c 200 "$jsonfile" 2>/dev/null)" >> "$LOG_FILE"
 
@@ -60,12 +61,13 @@ start_agent() {
     local chat_id="$2"
     local outfile="$3"
 
-    local workspace
+    local workspace agent_type
     workspace=$(get_workspace "$chat_id")
+    agent_type=$(get_agent_type "$chat_id")
 
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Calling $AGENT_TYPE in $workspace ..." >> "$LOG_FILE"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Calling $agent_type in $workspace ..." >> "$LOG_FILE"
 
-    case "$AGENT_TYPE" in
+    case "$agent_type" in
         codex)
             local session_id
             session_id=$(get_session_id "$chat_id") || true
@@ -77,7 +79,7 @@ start_agent() {
                 cd "$workspace"
 
                 run_codex_json() {
-                    "$@" --json 2>/dev/null | while IFS= read -r line; do
+                    "$@" --json < /dev/null 2>/dev/null | while IFS= read -r line; do
                         local evt_type
                         evt_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null) || continue
                         case "$evt_type" in
@@ -155,7 +157,7 @@ start_agent() {
             AGENT_PID=$!
             ;;
         *)
-            echo "Unknown agent type: $AGENT_TYPE" > "$outfile"
+            echo "Unknown agent type: $agent_type" > "$outfile"
             AGENT_PID=""
             ;;
     esac

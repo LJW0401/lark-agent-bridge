@@ -52,6 +52,24 @@ set_workspace() {
     echo "$dir" > "$SESSION_DIR/${chat_id}.workspace"
 }
 
+# Get agent type for a chat (falls back to global AGENT_TYPE)
+get_agent_type() {
+    local chat_id="$1"
+    local at_file="$SESSION_DIR/${chat_id}.agent_type"
+    if [[ -f "$at_file" ]]; then
+        cat "$at_file"
+    else
+        echo "$AGENT_TYPE"
+    fi
+}
+
+# Set agent type for a chat
+set_agent_type() {
+    local chat_id="$1"
+    local agent_type="$2"
+    echo "$agent_type" > "$SESSION_DIR/${chat_id}.agent_type"
+}
+
 # Save agent PID and reply message id for a chat (for /cancel)
 save_agent_pid() {
     local chat_id="$1"

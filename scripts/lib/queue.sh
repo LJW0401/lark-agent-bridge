@@ -75,21 +75,29 @@ process_message() {
     local elapsed=0
     local start_ts
     start_ts=$(date +%s)
+    local progress_pid=""
     while [[ -n "$AGENT_PID" ]] && kill -0 "$AGENT_PID" 2>/dev/null; do
         sleep "$STREAM_INTERVAL"
         elapsed=$(( $(date +%s) - start_ts ))
         local current_content
         current_content=$(cat "$outfile" 2>/dev/null || true)
         if [[ -n "$current_content" && "$current_content" != "$last_content" && -n "$reply_msg_id" ]]; then
+            # Kill any pending progress update before sending content update
+            [[ -n "$progress_pid" ]] && kill "$progress_pid" 2>/dev/null || true
+            progress_pid=""
             update_message "$reply_msg_id" "${current_content:0:3997}..."
             last_content="$current_content"
             log "Stream update: ${current_content:0:100}..."
         elif [[ -z "$current_content" && -n "$reply_msg_id" ]]; then
-            # No output yet — update elapsed time in background to avoid blocking poll loop
+            # Kill previous progress update to prevent message rollback
+            [[ -n "$progress_pid" ]] && kill "$progress_pid" 2>/dev/null || true
             update_message "$reply_msg_id" "⏳ 正在处理...（已等待 ${elapsed} 秒）" &
+            progress_pid=$!
             log "Progress: waiting ${elapsed}s (PID: $AGENT_PID)"
         fi
     done
+    # Clean up any remaining progress update
+    [[ -n "$progress_pid" ]] && kill "$progress_pid" 2>/dev/null || true
 
     # Wait for process to fully exit
     wait "$AGENT_PID" 2>/dev/null || true
@@ -107,7 +115,9 @@ process_message() {
     clear_agent_pid "$chat_id"
 
     # Save session id for future resume
-    case "$AGENT_TYPE" in
+    local agent_type
+    agent_type=$(get_agent_type "$chat_id")
+    case "$agent_type" in
         codex)
             save_codex_session "$chat_id" "${outfile}.json"
             ;;

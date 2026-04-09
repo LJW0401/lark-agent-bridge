@@ -44,27 +44,32 @@ HELP
             else
                 status_timeout="${SESSION_TIMEOUT} 秒"
             fi
-            local workspace
+            local workspace current_agent
             workspace=$(get_workspace "$chat_id")
+            current_agent=$(get_agent_type "$chat_id")
             send_to_feishu "$chat_id" "$(printf '📊 当前状态：\nAgent 类型: %s\n工作目录: %s\n会话状态: %b\n超时设置: %s' \
-                "$AGENT_TYPE" "$workspace" "$status_session" "$status_timeout")" || true
+                "$current_agent" "$workspace" "$status_session" "$status_timeout")" || true
             log "Command: /status"
             return 0
             ;;
         /agent)
-            send_to_feishu "$chat_id" "$(printf '当前 Agent 类型: %s（可用: codex, claude）\n用法: /agent codex 或 /agent claude' "$AGENT_TYPE")" || true
+            local current_agent
+            current_agent=$(get_agent_type "$chat_id")
+            send_to_feishu "$chat_id" "$(printf '当前 Agent 类型: %s（可用: codex, claude）\n用法: /agent codex 或 /agent claude' "$current_agent")" || true
             log "Command: /agent (query)"
             return 0
             ;;
         "/agent codex"|"/agent claude")
             local new_agent="${prompt##/agent }"
-            if [[ "$new_agent" == "$AGENT_TYPE" ]]; then
-                send_to_feishu "$chat_id" "当前已经是 $AGENT_TYPE，无需切换。" || true
+            local current_agent
+            current_agent=$(get_agent_type "$chat_id")
+            if [[ "$new_agent" == "$current_agent" ]]; then
+                send_to_feishu "$chat_id" "当前已经是 $current_agent，无需切换。" || true
             else
-                AGENT_TYPE="$new_agent"
+                set_agent_type "$chat_id" "$new_agent"
                 clear_session "$chat_id"
-                send_to_feishu "$chat_id" "已切换到 $AGENT_TYPE，会话上���文已清除。" || true
-                log "Agent switched to $AGENT_TYPE by chat $chat_id"
+                send_to_feishu "$chat_id" "已切换到 $new_agent，会话上下文已清除。" || true
+                log "Agent switched to $new_agent by chat $chat_id"
             fi
             return 0
             ;;
@@ -92,7 +97,7 @@ HELP
                 send_to_feishu "$chat_id" "已取消当前请求。" || true
                 log "Agent cancelled for chat $chat_id"
             else
-                send_to_feishu "$chat_id" "���前没有正在进行的请求。" || true
+                send_to_feishu "$chat_id" "当前没有正在进行的请求。" || true
             fi
             return 0
             ;;
@@ -104,7 +109,7 @@ HELP
                 send_to_feishu "$chat_id" "✅ 已创建新会话（ID: ${new_sid:0:16}...）" || true
                 log "New session created for $chat_id: $new_sid"
             else
-                send_to_feishu "$chat_id" "❌ 创建新会话失��，请稍后重试。" || true
+                send_to_feishu "$chat_id" "❌ 创建新会话失败，请稍后重试。" || true
                 log "Failed to create new session for $chat_id"
             fi
             return 0
