@@ -16,13 +16,19 @@ lark-cli 事件订阅（WebSocket）
 消息队列（同一会话串行，跨会话并行）
         │
         ▼
+创建任务状态 → 维护 depth 计数 → 进入会话队列
+        │
+        ▼
 解析消息 → 添加表情 → 创建占位回复
         │
         ▼
 Codex CLI / Claude Code（无头模式）
-        │（实时轮询输出，更新回复消息）
+        │（实时轮询输出，带重试更新回复消息）
         ▼
-最终结果渲染为 Markdown 富文本回复，移除表情
+最终结果渲染为 Markdown 富文本回复
+        │
+        ├─ 更新失败时降级为普通消息发送
+        └─ 完成后移除表情并写回任务状态
 ```
 
 ## 前置要求
@@ -61,7 +67,7 @@ cp .env.example .env
 | 命令 | 说明 |
 |------|------|
 | `/help`（或 `帮助`） | 显示可用命令列表 |
-| `/status` | 查看当前会话状态（Agent 类型、工作目录、会话时长、超时设置） |
+| `/status` | 查看当前会话状态（Agent 类型、工作目录、会话时长、超时设置、当前任务状态） |
 | `/agent` | 查看当前 Agent 类型 |
 | `/agent codex` 或 `/agent claude` | 切换 Agent 类型 |
 | `/workspace` | 查看当前工作目录 |
@@ -79,6 +85,30 @@ cp .env.example .env
 - 上下文会持续保留直到超时或手动清除（发送 `/new`）
 - 切换 Agent 类型时会自动清除当前会话上下文
 - 超时时间通过 `SESSION_TIMEOUT` 配置，默认为 `0`（永不超时）
+
+## 任务状态与容错
+
+服务会为每条消息维护显式任务状态，典型状态包括：
+
+- `queued`
+- `starting`
+- `running`
+- `cancelling`
+- `cancelled`
+- `completed`
+- `failed`
+
+这套状态机主要用于：
+
+- 避免仅靠 PID 文件推断任务状态
+- 让 `/cancel`、`/status` 和最终结果回写基于同一份任务元数据
+- 在同一会话高并发消息下，通过 `task` 锁和 `depth` 锁减少状态竞争
+
+当前错误处理与降级策略包括：
+
+- 飞书消息更新失败时自动重试
+- 占位回复创建失败时，最终结果降级为普通文本消息发送
+- Agent 工作目录不存在或执行失败时，写入明确错误并回传失败状态
 
 ## 配置说明
 
@@ -112,6 +142,8 @@ WORKSPACE_DIR=.
 # 日志文件路径
 LOG_FILE=./logs/bridge.log
 ```
+
+服务启动时会在日志中输出当前项目最近一次修改时间，便于确认部署版本。
 
 ## 服务管理
 
@@ -148,9 +180,10 @@ lark-agent-bridge/
 │   └── lib/
 │       ├── config.sh       # 环境变量、日志、cleanup
 │       ├── feishu.sh       # 飞书 API（消息、表情、更新）
-│       ├── session.sh      # 会话管理（session、workspace、PID）
+│       ├── task.sh         # 任务状态机（task 元数据、状态转移、锁）
+│       ├── session.sh      # 会话管理（session、workspace、取消）
 │       ├── agent.sh        # Agent 调用（codex / claude）
-│       ├── queue.sh        # 消息队列和流式处理
+│       ├── queue.sh        # 消息队列、depth 计数和流式处理
 │       └── commands.sh     # 斜杠命令处理
 └── services/
     └── bridge_service.sh   # systemd 服务管理
