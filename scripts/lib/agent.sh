@@ -1,12 +1,31 @@
 #!/usr/bin/env bash
 # agent.sh — AI Agent 调用（codex / claude）
 
+ensure_agent_workspace() {
+    local workspace="$1"
+    if [[ ! -d "$workspace" ]]; then
+        log "Workspace does not exist: $workspace"
+        return 1
+    fi
+}
+
+write_agent_error() {
+    local outfile="$1"
+    local error_msg="$2"
+    printf '%s\n' "$error_msg" > "$outfile"
+    printf '%s\n' "$error_msg" > "${outfile}.err"
+}
+
 # Create a new agent session for a chat (synchronous, used by /new)
 create_new_session() {
     local chat_id="$1"
     local workspace agent_type
     workspace=$(get_workspace "$chat_id")
     agent_type=$(get_agent_type "$chat_id")
+
+    if ! ensure_agent_workspace "$workspace"; then
+        return 1
+    fi
 
     case "$agent_type" in
         codex)
@@ -52,6 +71,10 @@ create_new_session() {
             fi
             return 1
             ;;
+        *)
+            log "Unsupported agent type for new session: $agent_type"
+            return 1
+            ;;
     esac
 }
 
@@ -67,19 +90,26 @@ start_agent() {
 
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Calling $agent_type in $workspace ..." >> "$LOG_FILE"
 
+    if ! ensure_agent_workspace "$workspace"; then
+        write_agent_error "$outfile" "工作目录不存在: $workspace"
+        AGENT_PID=""
+        return 1
+    fi
+
     case "$agent_type" in
         codex)
             local session_id
             session_id=$(get_session_id "$chat_id") || true
 
             local jsonfile="${outfile}.json"
+            local errfile="${outfile}.err"
 
             (
                 trap - EXIT TERM INT
                 cd "$workspace"
 
                 run_codex_json() {
-                    "$@" --json < /dev/null 2>/dev/null | while IFS= read -r line; do
+                    "$@" --json < /dev/null 2>>"$errfile" | while IFS= read -r line; do
                         local evt_type
                         evt_type=$(echo "$line" | jq -r '.type // empty' 2>/dev/null) || continue
                         case "$evt_type" in
@@ -116,6 +146,7 @@ start_agent() {
             session_id=$(get_session_id "$chat_id") || true
 
             local jsonfile="${outfile}.json"
+            local errfile="${outfile}.err"
 
             (
                 trap - EXIT TERM INT
@@ -124,7 +155,7 @@ start_agent() {
                 run_claude() {
                     # Run claude with --output-format json, extract text result to outfile
                     # and session_id to jsonfile for session tracking
-                    "$@" --output-format json < /dev/null 2>/dev/null | {
+                    "$@" --output-format json < /dev/null 2>>"$errfile" | {
                         local full_json
                         full_json=$(cat)
                         # Extract result text
@@ -157,7 +188,7 @@ start_agent() {
             AGENT_PID=$!
             ;;
         *)
-            echo "Unknown agent type: $agent_type" > "$outfile"
+            write_agent_error "$outfile" "未知的 Agent 类型: $agent_type"
             AGENT_PID=""
             ;;
     esac

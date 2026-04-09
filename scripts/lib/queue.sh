@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 # queue.sh — 消息队列和消息处理
 
+decrement_queue_depth() {
+    local depth_file="$1"
+    local d
+    d=$(cat "$depth_file" 2>/dev/null || echo 1)
+    d=$((d - 1))
+    if (( d > 0 )); then
+        echo "$d" > "$depth_file"
+    else
+        rm -f "$depth_file"
+    fi
+}
+
 # Enqueue a message for processing (per-chat serial, cross-chat parallel)
 enqueue_message() {
     local prompt="$1"
@@ -33,6 +45,7 @@ enqueue_message() {
 
         if ! flock -w 600 9; then
             task_transition "$task_id" failed "队列等待超时"
+            decrement_queue_depth "$depth_file"
             log "Queue timeout for chat $chat_id"
             return 1
         fi
@@ -46,14 +59,7 @@ enqueue_message() {
         process_message "$prompt" "$chat_id" "$message_id" "$task_id"
 
         # Decrement queue depth (inside flock, so no race between subshells)
-        local d
-        d=$(cat "$depth_file" 2>/dev/null || echo 1)
-        d=$((d - 1))
-        if (( d > 0 )); then
-            echo "$d" > "$depth_file"
-        else
-            rm -f "$depth_file"
-        fi
+        decrement_queue_depth "$depth_file"
     ) 9>"$QUEUE_DIR/${chat_id}.lock" &
 }
 
@@ -63,6 +69,7 @@ process_message() {
     local chat_id="$2"
     local message_id="$3"
     local task_id="$4"
+    local errfile=""
 
     task_set_current "$chat_id" "$task_id"
     task_transition "$task_id" starting "开始处理消息"
@@ -70,6 +77,7 @@ process_message() {
     # Step 1: Start agent immediately (don't wait for API calls)
     local outfile
     outfile=$(mktemp /tmp/agent_out.XXXXXX)
+    errfile="${outfile}.err"
     AGENT_PID=""
     start_agent "$prompt" "$chat_id" "$outfile"
     if [[ -n "$AGENT_PID" ]]; then
@@ -88,6 +96,9 @@ process_message() {
     reply_msg_id=$(reply_to_feishu "$message_id" "⏳ 正在处理...")
     task_set_field "$task_id" reply_message_id "$reply_msg_id"
     log "Created streaming reply: $reply_msg_id"
+    if [[ -z "$reply_msg_id" ]]; then
+        task_set_field "$task_id" note "流式回复创建失败，将在完成后降级为普通消息发送"
+    fi
 
     if [[ -n "$AGENT_PID" ]]; then
         if [[ "$(task_read_field "$task_id" state)" != "cancelling" ]]; then
@@ -112,7 +123,9 @@ process_message() {
             # Kill any pending progress update before sending content update
             [[ -n "$progress_pid" ]] && kill "$progress_pid" 2>/dev/null || true
             progress_pid=""
-            update_message "$reply_msg_id" "${current_content:0:3997}..."
+            if ! update_message "$reply_msg_id" "${current_content:0:3997}..."; then
+                log "Streaming update failed for reply $reply_msg_id"
+            fi
             last_content="$current_content"
             log "Stream update: ${current_content:0:100}..."
         elif [[ -z "$current_content" && -n "$reply_msg_id" ]]; then
@@ -135,7 +148,7 @@ process_message() {
     if [[ "$state" == "cancelling" || "$state" == "cancelled" ]]; then
         task_transition "$task_id" cancelled "任务已取消" || true
         log "Agent was cancelled for chat $chat_id"
-        rm -f "$outfile" "${outfile}.json"
+        rm -f "$outfile" "${outfile}.json" "$errfile"
         if [[ -n "$reaction_id" ]]; then
             remove_reaction "$message_id" "$reaction_id"
         fi
@@ -167,25 +180,39 @@ process_message() {
     esac
 
     # Step 4: Final update with complete result
-    local result
+    local result error_detail
     result=$(cat "$outfile" 2>/dev/null)
+    error_detail=$(head -c 500 "$errfile" 2>/dev/null | tr '\n' ' ' || true)
     rm -f "$outfile" "${outfile}.json"
 
     if [[ -z "$result" ]]; then
         log "Error: Agent returned empty result"
-        task_transition "$task_id" failed "Agent 未返回任何结果" || true
-        if [[ -n "$reply_msg_id" ]]; then
-            update_message "$reply_msg_id" "[错误] Agent 未返回任何结果，请稍后重试"
+        if [[ -n "$error_detail" ]]; then
+            task_transition "$task_id" failed "Agent 执行失败: ${error_detail}" || true
+        else
+            task_transition "$task_id" failed "Agent 未返回任何结果" || true
         fi
-        reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试"
+        if [[ -n "$reply_msg_id" ]]; then
+            update_message "$reply_msg_id" "[错误] Agent 未返回任何结果，请稍后重试" || true
+        fi
+        reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试" || true
     elif [[ -n "$reply_msg_id" ]]; then
         task_transition "$task_id" completed "任务处理完成" || true
-        update_message "$reply_msg_id" "$(truncate_message "$result")" --markdown
-        log "Reply sent to $chat_id"
+        if update_message "$reply_msg_id" "$(truncate_message "$result")" --markdown; then
+            log "Reply sent to $chat_id"
+        else
+            log "Final reply update failed for $chat_id, falling back to plain message"
+            send_to_feishu "$chat_id" "$(truncate_message "$result")" || true
+        fi
     else
-        log "Error: Failed to create reply message"
-        task_transition "$task_id" failed "回复消息创建失败" || true
-        reply_error_to_feishu "$chat_id" "$message_id" "回复发送失败，请稍后重试"
+        task_transition "$task_id" completed "占位回复创建失败，已降级为普通消息发送结果" || true
+        if send_to_feishu "$chat_id" "$(truncate_message "$result")"; then
+            log "Reply fallback sent to $chat_id"
+        else
+            log "Error: Failed to create reply message and fallback send failed"
+            task_transition "$task_id" failed "回复发送失败" || true
+            reply_error_to_feishu "$chat_id" "$message_id" "回复发送失败，请稍后重试" || true
+        fi
     fi
 
     # Step 5: Remove working emoji (task complete)
@@ -195,5 +222,6 @@ process_message() {
         task_clear_field "$task_id" reaction_id
     fi
 
+    rm -f "$errfile"
     task_clear_current "$chat_id" "$task_id"
 }
