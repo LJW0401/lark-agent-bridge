@@ -143,8 +143,15 @@ lark-agent-bridge/
 ├── .env.example            # 配置模板
 ├── .gitignore
 ├── scripts/
-│   ├── bridge.sh           # 核心：监听消息 → 调用 Agent → 回复
-│   └── test.sh             # 组件测试脚本
+│   ├── bridge.sh           # 入口：加载模块 + 主循环
+│   ├── test.sh             # 组件测试脚本
+│   └── lib/
+│       ├── config.sh       # 环境变量、日志、cleanup
+│       ├── feishu.sh       # 飞书 API（消息、表情、更新）
+│       ├── session.sh      # 会话管理（session、workspace、PID）
+│       ├── agent.sh        # Agent 调用（codex / claude）
+│       ├── queue.sh        # 消息队列和流式处理
+│       └── commands.sh     # 斜杠命令处理
 └── services/
     └── bridge_service.sh   # systemd 服务管理
 ```
