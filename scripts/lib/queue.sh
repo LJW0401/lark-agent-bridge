@@ -158,7 +158,7 @@ process_message() {
         local current_content
         current_content=$(cat "$outfile" 2>/dev/null || true)
         if [[ -n "$current_content" && "$current_content" != "$last_content" && -n "$reply_msg_id" ]]; then
-            if ! update_message "$reply_msg_id" "${current_content:0:3997}..."; then
+            if ! update_message "$reply_msg_id" "$(truncate_message "$current_content")"; then
                 log "Streaming update failed for reply $reply_msg_id"
             fi
             last_content="$current_content"
@@ -230,15 +230,30 @@ process_message() {
         reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试" || true
     elif [[ -n "$reply_msg_id" ]]; then
         task_transition "$task_id" completed "任务处理完成" || true
-        if update_message "$reply_msg_id" "$(truncate_message "$result")" --markdown; then
-            log "Reply sent to $chat_id"
+        local first_chunk extra_chunks start
+        first_chunk=$(message_chunk_at "$result" 0)
+        if update_message "$reply_msg_id" "$first_chunk" --markdown; then
+            start=$FEISHU_MESSAGE_LIMIT
+            extra_chunks=0
+            while (( start < ${#result} )); do
+                local chunk
+                chunk=$(message_chunk_at "$result" "$start")
+                if ! reply_to_feishu "$message_id" "$chunk" --markdown; then
+                    log "Additional chunk reply failed for $chat_id at offset $start"
+                    send_to_feishu "$chat_id" "[错误] 长回复的后续分片发送失败，请查看日志后重试。" || true
+                    break
+                fi
+                extra_chunks=$((extra_chunks + 1))
+                start=$((start + FEISHU_MESSAGE_LIMIT))
+            done
+            log "Reply sent to $chat_id with $((extra_chunks + 1)) chunk(s)"
         else
             log "Final reply update failed for $chat_id, falling back to plain message"
-            send_to_feishu "$chat_id" "$(truncate_message "$result")" || true
+            send_to_feishu "$chat_id" "$result" --markdown || true
         fi
     else
         task_transition "$task_id" completed "占位回复创建失败，已降级为普通消息发送结果" || true
-        if send_to_feishu "$chat_id" "$(truncate_message "$result")"; then
+        if send_to_feishu "$chat_id" "$result" --markdown; then
             log "Reply fallback sent to $chat_id"
         else
             log "Error: Failed to create reply message and fallback send failed"
