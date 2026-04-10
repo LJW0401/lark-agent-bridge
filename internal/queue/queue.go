@@ -187,7 +187,6 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	// 流式轮询更新
 	ticker := time.NewTicker(time.Duration(p.cfg.Stream.Interval) * time.Second)
 	defer ticker.Stop()
-	lastContent := ""
 
 	for {
 		select {
@@ -228,12 +227,14 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			return
 		case <-ticker.C:
 			current := outputBuf.String()
-			if current != "" && current != lastContent && replyMsgID != "" {
-				truncated := feishu.TruncateMessage(current, p.cfg.Stream.MessageLimit)
-				p.feishu.UpdateMessage(replyMsgID, truncated, false)
-				lastContent = current
-			} else if current == "" && replyMsgID != "" {
-				elapsed := int(time.Since(startTime).Seconds())
+			elapsed := int(time.Since(startTime).Seconds())
+			if current != "" && replyMsgID != "" {
+				// 有内容时：显示内容 + 末尾追加处理中标识
+				progress := fmt.Sprintf("\n\n⏳ 正在处理...（%d 秒）", elapsed)
+				display := feishu.TruncateMessage(current, p.cfg.Stream.MessageLimit-len([]rune(progress)))
+				p.feishu.UpdateMessage(replyMsgID, display+progress, false)
+			} else if replyMsgID != "" {
+				// 无内容时：仅显示等待
 				p.feishu.UpdateMessage(replyMsgID, fmt.Sprintf("⏳ 正在处理...（已等待 %d 秒）", elapsed), false)
 			}
 		}
