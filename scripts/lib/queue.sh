@@ -230,21 +230,33 @@ process_message() {
         reply_error_to_feishu "$chat_id" "$message_id" "Agent 未返回任何结果，请稍后重试" || true
     elif [[ -n "$reply_msg_id" ]]; then
         task_transition "$task_id" completed "任务处理完成" || true
-        local first_chunk extra_chunks start
-        first_chunk=$(message_chunk_at "$result" 0)
+        local first_chunk extra_chunks start total suffix payload_limit
+        total=$(message_chunk_count "$result")
+        first_chunk=$(message_chunk_at "$result" 0 1 "$total")
         if update_message "$reply_msg_id" "$first_chunk" --markdown; then
-            start=$FEISHU_MESSAGE_LIMIT
+            suffix=$(message_chunk_suffix 1 "$total")
+            payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+            if (( payload_limit <= 0 )); then
+                payload_limit=1
+            fi
+            start=$payload_limit
             extra_chunks=0
             while (( start < ${#result} )); do
-                local chunk
-                chunk=$(message_chunk_at "$result" "$start")
+                local chunk index
+                index=$((extra_chunks + 2))
+                chunk=$(message_chunk_at "$result" "$start" "$index" "$total")
                 if ! reply_to_feishu "$message_id" "$chunk" --markdown; then
                     log "Additional chunk reply failed for $chat_id at offset $start"
                     send_to_feishu "$chat_id" "[错误] 长回复的后续分片发送失败，请查看日志后重试。" || true
                     break
                 fi
                 extra_chunks=$((extra_chunks + 1))
-                start=$((start + FEISHU_MESSAGE_LIMIT))
+                suffix=$(message_chunk_suffix "$index" "$total")
+                payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+                if (( payload_limit <= 0 )); then
+                    payload_limit=1
+                fi
+                start=$((start + payload_limit))
             done
             log "Reply sent to $chat_id with $((extra_chunks + 1)) chunk(s)"
         else

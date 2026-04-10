@@ -79,13 +79,49 @@ message_chunk_count() {
         echo 1
         return 0
     fi
-    echo $(( (length + FEISHU_MESSAGE_LIMIT - 1) / FEISHU_MESSAGE_LIMIT ))
+
+    local total=1
+    while true; do
+        local suffix payload_limit needed
+        suffix=$(message_chunk_suffix "$total" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
+        fi
+        needed=$(( (length + payload_limit - 1) / payload_limit ))
+        if (( needed == total )); then
+            echo "$total"
+            return 0
+        fi
+        total="$needed"
+    done
+}
+
+message_chunk_suffix() {
+    local index="$1"
+    local total="$2"
+    if (( total <= 1 )); then
+        echo ""
+    else
+        printf '\n\n[%s/%s]' "$index" "$total"
+    fi
 }
 
 message_chunk_at() {
     local message="$1"
     local start="$2"
-    echo "${message:start:FEISHU_MESSAGE_LIMIT}"
+    local index="${3:-1}"
+    local total="${4:-1}"
+    local suffix payload_limit chunk
+
+    suffix=$(message_chunk_suffix "$index" "$total")
+    payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+    if (( payload_limit <= 0 )); then
+        payload_limit=1
+    fi
+
+    chunk="${message:start:payload_limit}"
+    printf '%s%s\n' "$chunk" "$suffix"
 }
 
 send_message_once() {
@@ -161,15 +197,24 @@ reply_to_feishu() {
     local use_markdown="${3:-}"
     local first_reply_msg_id=""
     local start=0
+    local total index payload_limit suffix
 
+    total=$(message_chunk_count "$message")
+    index=1
     while (( start < ${#message} || start == 0 )); do
         local chunk reply_msg_id
-        chunk=$(message_chunk_at "$message" "$start")
+        chunk=$(message_chunk_at "$message" "$start" "$index" "$total")
         reply_msg_id=$(reply_message_once "$message_id" "$chunk" "$use_markdown") || return 1
         if [[ -z "$first_reply_msg_id" ]]; then
             first_reply_msg_id="$reply_msg_id"
         fi
-        start=$((start + FEISHU_MESSAGE_LIMIT))
+        suffix=$(message_chunk_suffix "$index" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
+        fi
+        start=$((start + payload_limit))
+        index=$((index + 1))
         if (( ${#message} == 0 )); then
             break
         fi
@@ -189,12 +234,21 @@ send_to_feishu() {
     local message="$2"
     local use_markdown="${3:-}"
     local start=0
+    local total index payload_limit suffix
 
+    total=$(message_chunk_count "$message")
+    index=1
     while (( start < ${#message} || start == 0 )); do
         local chunk
-        chunk=$(message_chunk_at "$message" "$start")
+        chunk=$(message_chunk_at "$message" "$start" "$index" "$total")
         send_message_once "$chat_id" "$chunk" "$use_markdown" || return 1
-        start=$((start + FEISHU_MESSAGE_LIMIT))
+        suffix=$(message_chunk_suffix "$index" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
+        fi
+        start=$((start + payload_limit))
+        index=$((index + 1))
         if (( ${#message} == 0 )); then
             break
         fi
