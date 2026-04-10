@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -59,6 +60,7 @@ func main() {
 	// 正常前台运行
 	stopCh := make(chan struct{})
 	bridgeMain(stopCh)
+	waitForKey()
 }
 
 // bridgeMain 核心业务逻辑，stop channel 关闭时退出
@@ -72,10 +74,22 @@ func bridgeMain(stop <-chan struct{}) {
 		return
 	}
 
+	// 配置文件不存在时自动进入向导
+	if _, err := os.Stat(*configPath); os.IsNotExist(err) {
+		fmt.Println("未找到配置文件，进入首次配置向导...")
+		fmt.Println()
+		if wizardErr := config.RunInitWizard(*configPath); wizardErr != nil {
+			fmt.Fprintf(os.Stderr, "配置向导失败: %v\n", wizardErr)
+			waitForKey()
+			os.Exit(1)
+		}
+	}
+
 	// 加载配置
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "加载配置失败: %v\n", err)
+		waitForKey()
 		os.Exit(1)
 	}
 
@@ -83,6 +97,7 @@ func bridgeMain(stop <-chan struct{}) {
 	logger, err := config.NewLogger(cfg.Log.File)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化日志失败: %v\n", err)
+		waitForKey()
 		os.Exit(1)
 	}
 	defer logger.Close()
@@ -107,6 +122,7 @@ func bridgeMain(stop <-chan struct{}) {
 	events := make(chan feishu.Event, 100)
 	if err := fc.Subscribe(events); err != nil {
 		logger.Log("启动事件订阅失败: %v", err)
+		waitForKey()
 		os.Exit(1)
 	}
 
@@ -289,6 +305,25 @@ func handleConfigCommand() {
 		fmt.Fprintf(os.Stderr, "未知的 config 子命令: %s\n", os.Args[2])
 		os.Exit(1)
 	}
+}
+
+// waitForKey 在前台运行时等待用户按键，防止窗口一闪而过
+func waitForKey() {
+	// Windows Service 模式下不暂停
+	if platform.IsWindowsService() {
+		return
+	}
+	// 检查 stdin 是否是终端（管道或服务模式下跳过）
+	info, err := os.Stdin.Stat()
+	if err != nil {
+		return
+	}
+	if info.Mode()&os.ModeCharDevice == 0 {
+		return // stdin 不是终端，跳过
+	}
+	fmt.Println()
+	fmt.Print("按回车键退出...")
+	bufio.NewReader(os.Stdin).ReadByte()
 }
 
 func ensureRoot() {
