@@ -4,7 +4,7 @@
 
 ## 简介
 
-监听飞书机器人收到的消息，通过 [lark-cli](https://github.com/larksuite/cli) 事件订阅接收，转发给 AI Agent（默认使用 Codex CLI）处理，并将结果回复到飞书。
+监听飞书机器人收到的消息，通过 [lark-cli](https://github.com/larksuite/cli) 事件订阅接收，转发给 AI Agent（Codex CLI 或 Claude Code）处理，并将结果回复到飞书。
 
 ```
 用户向飞书机器人发送消息
@@ -34,40 +34,64 @@ Codex CLI / Claude Code（无头模式）
 ## 前置要求
 
 - [lark-cli](https://github.com/larksuite/cli) 已安装并配置
-- [Codex CLI](https://github.com/openai/codex) 已安装
+- [Codex CLI](https://github.com/openai/codex) 或 [Claude Code](https://claude.ai/claude-code)（至少安装一个）
 - 飞书机器人已开启 `im:message` 事件订阅
-- jq（JSON 解析工具）
+
+## 安装
+
+### 方式一：下载二进制（推荐）
+
+从 [Releases](https://github.com/LJW0401/lark-agent-bridge/releases) 下载对应平台的二进制文件。
+
+### 方式二：一键安装（Linux）
+
+```bash
+./installer/linux/install.sh
+```
+
+### 方式三：deb 包安装（Ubuntu/Debian）
+
+```bash
+sudo dpkg -i lark-agent-bridge_*_amd64.deb
+```
+
+### 方式四：从源码编译
+
+```bash
+# 安装 Go 1.21+
+make build          # 编译当前平台
+make cross          # 交叉编译 Linux + Windows
+make deb            # 构建 .deb 包
+```
 
 ## 快速开始
 
 ```bash
-# 1. 安装依赖
+# 1. 安装 lark-cli（如未安装）
 npm install -g @larksuite/cli
 npx skills add larksuite/cli -y -g
-sudo apt install jq
 
 # 2. 配置 lark-cli（仅首次需要）
 lark-cli config init
 lark-cli auth login --recommend
 
-# 3. 配置环境变量
-cp .env.example .env
+# 3. 配置桥接服务（交互式向导，自动探测命令路径）
+lark-agent-bridge config init
 
-# 4. 运行测试
-./scripts/test.sh
-
-# 5. 启动桥接服务
-./scripts/bridge.sh
+# 4. 启动服务
+lark-agent-bridge
 ```
 
-## 可用命令
+首次运行如果没有配置文件，会自动进入配置向导。
+
+## 飞书聊天命令
 
 在飞书聊天中向机器人发送以下命令：
 
 | 命令 | 说明 |
 |------|------|
 | `/help`（或 `帮助`） | 显示可用命令列表 |
-| `/status` | 查看当前会话状态（Agent 类型、工作目录、会话时长、超时设置、当前任务状态） |
+| `/status` | 查看当前会话状态 |
 | `/agent` | 查看当前 Agent 类型 |
 | `/agent codex` 或 `/agent claude` | 切换 Agent 类型 |
 | `/workspace` | 查看当前工作目录 |
@@ -75,122 +99,87 @@ cp .env.example .env
 | `/cancel` | 取消正在进行的请求 |
 | `/new`（或 `新对话`） | 创建新会话，开始新对话 |
 
-以 `/` 开头的未知命令会被拦截并提示使用 `/help`。其他普通消息会直接转发给 AI Agent 处理。
+以 `//` 开头可将 `/` 命令发给 Agent，如 `//help`。
 
-## 会话管理
+## 配置管理
 
-服务支持多轮对话上下文保持：
-
-- 每个飞书会话（chat_id）独立维护会话上下文
-- 上下文会持续保留直到超时或手动清除（发送 `/new`）
-- 切换 Agent 类型时会自动清除当前会话上下文
-- 超时时间通过 `SESSION_TIMEOUT` 配置，默认为 `0`（永不超时）
-
-## 任务状态与容错
-
-服务会为每条消息维护显式任务状态，典型状态包括：
-
-- `queued`
-- `starting`
-- `running`
-- `cancelling`
-- `cancelled`
-- `completed`
-- `failed`
-
-这套状态机主要用于：
-
-- 避免仅靠 PID 文件推断任务状态
-- 让 `/cancel`、`/status` 和最终结果回写基于同一份任务元数据
-- 在同一会话高并发消息下，通过 `task` 锁和 `depth` 锁减少状态竞争
-
-当前错误处理与降级策略包括：
-
-- 飞书消息更新失败时自动重试
-- 占位回复创建失败时，最终结果降级为普通文本消息发送
-- Agent 返回过长时，按消息长度自动拆分为连续多条回复，避免后半段被截断
-- Agent 工作目录不存在或执行失败时，写入明确错误并回传失败状态
-
-## 配置说明
-
-复制 `.env.example` 为 `.env` 并按需修改：
+使用 `config` 子命令管理配置，无需手动编辑文件：
 
 ```bash
-# AI Agent 类型：codex | claude
-AGENT_TYPE=codex
-
-# Codex CLI 命令（默认: codex）
-CODEX_CMD=codex
-
-# Claude Code 命令（默认: claude）
-CLAUDE_CMD=claude
-
-# 处理中显示的表情
-WORKING_EMOJI=OnIt
-
-# 出错时显示的表情
-ERROR_EMOJI=Frown
-
-# 会话超时（秒），0 表示永不超时
-SESSION_TIMEOUT=0
-
-# 流式更新轮询间隔（秒）
-STREAM_INTERVAL=3
-
-# 单条飞书消息的最大字符数，超长回复会自动分片连续发送
-FEISHU_MESSAGE_LIMIT=4000
-
-# Agent 默认工作目录
-WORKSPACE_DIR=.
-
-# 日志文件路径
-LOG_FILE=./logs/bridge.log
+lark-agent-bridge config init            # 交互式配置向导
+lark-agent-bridge config list            # 列出所有配置项及当前值
+lark-agent-bridge config get <key>       # 读取配置项
+lark-agent-bridge config set <key> <val> # 设置配置项
+lark-agent-bridge config path            # 显示配置文件路径
 ```
 
-服务启动时会在日志中输出当前项目最近一次修改时间，便于确认部署版本。
+### 可配置项
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `agent.type` | `codex` | AI Agent 类型（codex / claude） |
+| `agent.codex_cmd` | `codex` | Codex CLI 命令路径 |
+| `agent.claude_cmd` | `claude` | Claude Code 命令路径 |
+| `feishu.lark_cli_cmd` | `lark-cli` | lark-cli 命令路径 |
+| `feishu.working_emoji` | `OnIt` | 处理中表情 |
+| `feishu.error_emoji` | `Frown` | 错误表情 |
+| `stream.interval` | `3` | 流式更新间隔（秒） |
+| `stream.message_limit` | `4000` | 单条消息字符上限 |
+| `session.timeout` | `0` | 会话超时（秒），0=永不超时 |
+| `workspace.dir` | `.` | 默认工作目录 |
+| `log.file` | `./logs/bridge.log` | 日志文件路径 |
+| `retry.max_retries` | `3` | 飞书 API 最大重试次数 |
 
 ## 服务管理
 
-使用 systemd 管理服务，支持开机自启：
+支持 Linux systemd 和 Windows Service：
 
 ```bash
-# 安装服务
-./services/bridge_service.sh install
-
-# 启动 / 停止 / 重启
-./services/bridge_service.sh start
-./services/bridge_service.sh stop
-./services/bridge_service.sh restart
-
-# 查看状态 / 跟踪日志
-./services/bridge_service.sh status
-./services/bridge_service.sh logs
-
-# 卸载服务
-./services/bridge_service.sh uninstall
+lark-agent-bridge install     # 安装为系统服务（自动 sudo/UAC 提权）
+lark-agent-bridge start       # 启动服务
+lark-agent-bridge stop        # 停止服务
+lark-agent-bridge restart     # 重启服务
+lark-agent-bridge status      # 查看服务状态
+lark-agent-bridge logs [-f]   # 查看服务日志
+lark-agent-bridge uninstall   # 卸载服务
 ```
+
+## 会话管理
+
+- 每个飞书会话（chat_id）独立维护会话上下文
+- 上下文持续保留直到超时或手动清除（`/new`）
+- 切换 Agent 类型时自动清除当前会话上下文
+- 超时时间通过 `session.timeout` 配置，默认永不超时
+
+## 任务状态机
+
+每条消息维护显式任务状态：
+
+```
+queued → starting → running → completed
+                         ↘ → cancelling → cancelled
+                         ↘ → failed
+```
+
+用于 `/cancel`、`/status` 和结果回写的统一状态管理。
 
 ## 项目结构
 
 ```
 lark-agent-bridge/
-├── README.md               # 项目说明
-├── TODO.md                 # 功能规划清单
-├── .env.example            # 配置模板
-├── .gitignore
-├── scripts/
-│   ├── bridge.sh           # 入口：加载模块 + 主循环
-│   ├── test.sh             # 组件测试脚本
-│   └── lib/
-│       ├── config.sh       # 环境变量、日志、cleanup
-│       ├── feishu.sh       # 飞书 API（消息、表情、更新）
-│       ├── task.sh         # 任务状态机（task 元数据、状态转移、锁）
-│       ├── session.sh      # 会话管理（session、workspace、取消）
-│       ├── agent.sh        # Agent 调用（codex / claude）
-│       ├── queue.sh        # 消息队列、depth 计数和流式处理
-│       └── commands.sh     # 斜杠命令处理
-└── services/
-    └── bridge_service.sh   # systemd 服务管理
+├── cmd/bridge/main.go            # 入口：子命令路由 + 主循环
+├── internal/
+│   ├── config/                   # 配置加载、日志、config 子命令、向导
+│   ├── feishu/                   # 飞书 API（事件订阅、消息、表情、分片）
+│   ├── agent/                    # Agent 接口 + codex/claude 实现
+│   ├── session/                  # 会话管理（上下文、工作目录、Agent 类型）
+│   ├── task/                     # 任务状态机（per-task 锁、文件持久化）
+│   ├── queue/                    # 消息队列（per-chat goroutine 串行）
+│   └── commands/                 # 飞书斜杠命令处理
+├── platform/                     # 跨平台服务管理 + 提权
+├── installer/                    # 安装包（Linux deb/脚本、Windows Inno Setup）
+├── config.example.yaml           # 配置模板
+└── Makefile                      # 构建 + 交叉编译 + deb 打包
 ```
 
 ## 许可证
