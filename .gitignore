@@ -7,3 +7,5 @@ node_modules/
 .queue/
 .tasks/
 .worktrees/
+build/
+config.yaml

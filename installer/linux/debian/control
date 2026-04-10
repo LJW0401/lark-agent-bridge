@@ -1,0 +1,13 @@
+Package: lark-agent-bridge
+Version: {{VERSION}}
+Section: utils
+Priority: optional
+Architecture: {{ARCH}}
+Maintainer: LJW0401
+Description: Feishu AI Agent Message Bridge
+ A bridge service that connects Feishu (Lark) messaging
+ platform with AI agents (Codex CLI or Claude Code).
+ Supports real-time streaming replies, multi-turn conversations,
+ and per-chat workspace/agent switching.
+Depends:
+Homepage: https://github.com/LJW0401/lark-agent-bridge
