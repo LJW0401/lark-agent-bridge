@@ -33,6 +33,7 @@ type AgentConfig struct {
 }
 
 type FeishuConfig struct {
+	LarkCliCmd   string   `yaml:"lark_cli_cmd"`
 	EventTypes   []string `yaml:"event_types"`
 	WorkingEmoji string   `yaml:"working_emoji"`
 	ErrorEmoji   string   `yaml:"error_emoji"`
@@ -86,6 +87,7 @@ func (c *Config) setDefaults() {
 	c.Agent.Type = "codex"
 	c.Agent.CodexCmd = "codex"
 	c.Agent.ClaudeCmd = "claude"
+	c.Feishu.LarkCliCmd = "lark-cli"
 	c.Feishu.EventTypes = []string{"im.message.receive_v1"}
 	c.Feishu.WorkingEmoji = "OnIt"
 	c.Feishu.ErrorEmoji = "Frown"

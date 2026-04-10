@@ -32,20 +32,44 @@ type Event struct {
 
 // Subscribe 订阅飞书事件，逐条解析后通过 channel 发送
 func (c *Client) Subscribe(events chan<- Event) error {
-	args := []string{"event", "+subscribe", "--as", "bot"}
+	args := []string{"event", "+subscribe"}
 	for _, t := range c.cfg.Feishu.EventTypes {
 		args = append(args, "--event-types", t)
 	}
+	args = append(args, "--as", "bot", "--force")
 
-	cmd := exec.Command("lark-cli", args...)
+	c.logger.Log("执行命令: %s %s", c.cfg.Feishu.LarkCliCmd, strings.Join(args, " "))
+	cmd := exec.Command(c.cfg.Feishu.LarkCliCmd, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("创建 stdout 管道失败: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("创建 stderr 管道失败: %w", err)
 	}
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动 lark-cli event subscribe 失败: %w", err)
 	}
+
+	// 捕获 stderr：仅记录真正的错误（JSON 格式），忽略 lark-cli 状态信息和 SDK 内部日志
+	go func() {
+		errScanner := bufio.NewScanner(stderr)
+		for errScanner.Scan() {
+			line := errScanner.Text()
+			// JSON 错误响应（如 not configured）需要记录
+			if strings.HasPrefix(strings.TrimSpace(line), "{") ||
+				strings.HasPrefix(strings.TrimSpace(line), "}") ||
+				strings.Contains(line, `"ok": false`) ||
+				strings.Contains(line, `"error"`) ||
+				strings.Contains(line, `"message"`) ||
+				strings.Contains(line, `"hint"`) {
+				c.logger.Log("lark-cli error: %s", line)
+			}
+			// 状态信息、SDK Info/Error、连接信息等静默丢弃
+		}
+	}()
 
 	go func() {
 		defer close(events)
@@ -123,7 +147,7 @@ func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
 	data := fmt.Sprintf(`{"reaction_type":{"emoji_type":"%s"}}`, emojiType)
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
-		out, err := exec.Command("lark-cli", "im", "reactions", "create",
+		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "create",
 			"--params", params, "--data", data, "--as", "bot").CombinedOutput()
 		if err == nil {
 			var resp map[string]any
@@ -144,7 +168,7 @@ func (c *Client) RemoveReaction(messageID, reactionID string) error {
 	params := fmt.Sprintf(`{"message_id":"%s","reaction_id":"%s"}`, messageID, reactionID)
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
-		out, err := exec.Command("lark-cli", "im", "reactions", "delete",
+		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "delete",
 			"--params", params, "--as", "bot").CombinedOutput()
 		if err == nil {
 			var resp map[string]any
@@ -185,7 +209,7 @@ func (c *Client) replyOnce(messageID, text string, markdown bool) (string, error
 	}
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
-		out, err := exec.Command("lark-cli", "im", "+messages-reply",
+		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-reply",
 			"--message-id", messageID, msgFlag, text, "--as", "bot").CombinedOutput()
 		if err == nil {
 			var resp map[string]any
@@ -220,7 +244,7 @@ func (c *Client) sendOnce(chatID, text string, markdown bool) error {
 	}
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
-		out, err := exec.Command("lark-cli", "im", "+messages-send",
+		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-send",
 			"--chat-id", chatID, msgFlag, text, "--as", "bot").CombinedOutput()
 		if err == nil {
 			var resp map[string]any
@@ -279,7 +303,7 @@ func (c *Client) UpdateMessage(msgID, text string, markdown bool) error {
 	apiPath := fmt.Sprintf("/open-apis/im/v1/messages/%s", msgID)
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
-		out, err := exec.Command("lark-cli", "api", "PUT", apiPath,
+		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "PUT", apiPath,
 			"--data", string(reqBytes), "--as", "bot").CombinedOutput()
 		if err == nil {
 			var resp map[string]any
