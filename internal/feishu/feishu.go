@@ -75,6 +75,7 @@ func (c *Client) Subscribe(events chan<- Event) error {
 
 	// 捕获 stderr：仅记录真正的错误（JSON 格式），忽略 lark-cli 状态信息和 SDK 内部日志
 	go func() {
+		defer c.logger.Recover("feishu-stderr-scanner")
 		errScanner := bufio.NewScanner(stderr)
 		for errScanner.Scan() {
 			line := errScanner.Text()
@@ -92,6 +93,7 @@ func (c *Client) Subscribe(events chan<- Event) error {
 	}()
 
 	go func() {
+		defer c.logger.Recover("feishu-event-scanner")
 		defer close(events)
 		scanner := bufio.NewScanner(stdout)
 		// 飞书事件可能较大，增大缓冲区
@@ -169,15 +171,18 @@ func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "create",
 			"--params", params, "--data", data, "--as", "bot").CombinedOutput()
-		if err == nil {
+		if err != nil {
+			c.logger.Log("Add reaction 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+		} else {
 			var resp map[string]any
-			if json.Unmarshal(out, &resp) == nil {
-				if rid := jsonPath(resp, "data.reaction_id"); rid != "" {
-					return rid, nil
-				}
+			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+				c.logger.Log("Add reaction 响应解析失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
+			} else if rid := jsonPath(resp, "data.reaction_id"); rid != "" {
+				return rid, nil
+			} else {
+				c.logger.Log("Add reaction 未返回 reaction_id (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 			}
 		}
-		c.logger.Log("Add reaction 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("add reaction 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)
@@ -190,15 +195,18 @@ func (c *Client) RemoveReaction(messageID, reactionID string) error {
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "delete",
 			"--params", params, "--as", "bot").CombinedOutput()
-		if err == nil {
+		if err != nil {
+			c.logger.Log("Remove reaction 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+		} else {
 			var resp map[string]any
-			if json.Unmarshal(out, &resp) == nil {
-				if code, ok := resp["code"].(float64); ok && code == 0 {
-					return nil
-				}
+			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+				c.logger.Log("Remove reaction 响应解析失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
+			} else if code, ok := resp["code"].(float64); ok && code == 0 {
+				return nil
+			} else {
+				c.logger.Log("Remove reaction 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 			}
 		}
-		c.logger.Log("Remove reaction 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("remove reaction 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)
@@ -231,15 +239,18 @@ func (c *Client) replyOnce(messageID, text string, markdown bool) (string, error
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-reply",
 			"--message-id", messageID, msgFlag, text, "--as", "bot").CombinedOutput()
-		if err == nil {
+		if err != nil {
+			c.logger.Log("Reply 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+		} else {
 			var resp map[string]any
-			if json.Unmarshal(out, &resp) == nil {
-				if rid := jsonPath(resp, "data.message_id", "message_id"); rid != "" {
-					return rid, nil
-				}
+			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+				c.logger.Log("Reply 响应解析失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
+			} else if rid := jsonPath(resp, "data.message_id", "message_id"); rid != "" {
+				return rid, nil
+			} else {
+				c.logger.Log("Reply 未返回 message_id (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 			}
 		}
-		c.logger.Log("Reply 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 		time.Sleep(2 * time.Second)
 	}
 	return "", fmt.Errorf("reply 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)
@@ -266,24 +277,28 @@ func (c *Client) sendOnce(chatID, text string, markdown bool) error {
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-send",
 			"--chat-id", chatID, msgFlag, text, "--as", "bot").CombinedOutput()
-		if err == nil {
+		if err != nil {
+			c.logger.Log("Send 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+		} else {
 			var resp map[string]any
-			if json.Unmarshal(out, &resp) == nil {
+			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+				c.logger.Log("Send 响应解析失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
+			} else {
 				ok := false
 				if v, exists := resp["ok"]; exists {
 					ok, _ = v.(bool)
 				}
 				if code, exists := resp["code"]; exists {
-					if c, _ := code.(float64); c == 0 {
+					if cd, _ := code.(float64); cd == 0 {
 						ok = true
 					}
 				}
 				if ok {
 					return nil
 				}
+				c.logger.Log("Send 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 			}
 		}
-		c.logger.Log("Send 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("send 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)
@@ -325,18 +340,20 @@ func (c *Client) UpdateMessage(msgID, text string, markdown bool) error {
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "PUT", apiPath,
 			"--data", string(reqBytes), "--as", "bot").CombinedOutput()
-		if err == nil {
+		if err != nil {
+			c.logger.Log("Update message 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+		} else {
 			var resp map[string]any
-			if json.Unmarshal(out, &resp) == nil {
-				if code, ok := resp["code"].(float64); ok && code == 0 {
-					return nil
-				}
-				if msg, ok := resp["msg"].(string); ok && msg == "success" {
-					return nil
-				}
+			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
+				c.logger.Log("Update message 响应解析失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
+			} else if code, ok := resp["code"].(float64); ok && code == 0 {
+				return nil
+			} else if msg, ok := resp["msg"].(string); ok && msg == "success" {
+				return nil
+			} else {
+				c.logger.Log("Update message 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 			}
 		}
-		c.logger.Log("Update message 失败 (attempt %d/%d): %s", attempt, c.cfg.Retry.MaxRetries, truncOut(out))
 		time.Sleep(2 * time.Second)
 	}
 	return fmt.Errorf("update message 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)

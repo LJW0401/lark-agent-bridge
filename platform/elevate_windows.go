@@ -19,7 +19,16 @@ func EnsureRoot() {
 
 	// 通过 ShellExecuteEx 以 "runas" 触发 UAC 提权
 	exe, _ := os.Executable()
-	args := strings.Join(os.Args[1:], " ")
+	// 对含空格的参数加引号，避免路径断裂
+	quoted := make([]string, len(os.Args)-1)
+	for i, arg := range os.Args[1:] {
+		if strings.Contains(arg, " ") {
+			quoted[i] = `"` + arg + `"`
+		} else {
+			quoted[i] = arg
+		}
+	}
+	args := strings.Join(quoted, " ")
 
 	verb, _ := syscall.UTF16PtrFromString("runas")
 	exePtr, _ := syscall.UTF16PtrFromString(exe)

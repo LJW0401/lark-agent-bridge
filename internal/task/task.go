@@ -44,11 +44,16 @@ type Task struct {
 type Manager struct {
 	cfg    *config.Config
 	logger *config.Logger
-	mu     sync.Mutex // 替代 flock，Go 原生互斥锁
+	locks  sync.Map // map[taskID]*sync.Mutex，per-task 锁
 }
 
 func NewManager(cfg *config.Config, logger *config.Logger) *Manager {
 	return &Manager{cfg: cfg, logger: logger}
+}
+
+func (m *Manager) taskLock(taskID string) *sync.Mutex {
+	v, _ := m.locks.LoadOrStore(taskID, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // validTransitions 合法的状态转移
@@ -94,8 +99,9 @@ func (m *Manager) Create(chatID, messageID string) (string, error) {
 
 // Transition 执行状态转移
 func (m *Manager) Transition(taskID string, newState State, reason string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	mu := m.taskLock(taskID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	t, err := m.load(taskID)
 	if err != nil {
@@ -156,8 +162,9 @@ func (m *Manager) ReadField(taskID, field string) string {
 
 // SetField 设置任务字段
 func (m *Manager) SetField(taskID, field, value string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	mu := m.taskLock(taskID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	t, err := m.load(taskID)
 	if err != nil {
@@ -186,8 +193,9 @@ func (m *Manager) SetField(taskID, field, value string) error {
 
 // ClearField 清除任务字段
 func (m *Manager) ClearField(taskID, field string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	mu := m.taskLock(taskID)
+	mu.Lock()
+	defer mu.Unlock()
 
 	t, err := m.load(taskID)
 	if err != nil {

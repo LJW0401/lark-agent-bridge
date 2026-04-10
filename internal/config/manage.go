@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -99,14 +100,13 @@ func GetConfigPath() string {
 	// 优先当前目录
 	if _, err := os.Stat("config.yaml"); err == nil {
 		abs, _ := os.Getwd()
-		return abs + "/config.yaml"
+		return filepath.Join(abs, "config.yaml")
 	}
 
 	// 然后可执行文件同目录
 	exe, err := os.Executable()
 	if err == nil {
-		dir := exeDir(exe)
-		p := dir + "/config.yaml"
+		p := filepath.Join(filepath.Dir(exe), "config.yaml")
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
@@ -114,7 +114,7 @@ func GetConfigPath() string {
 
 	// 默认当前目录（将会创建）
 	abs, _ := os.Getwd()
-	return abs + "/config.yaml"
+	return filepath.Join(abs, "config.yaml")
 }
 
 // --- 内部工具函数 ---
@@ -188,11 +188,3 @@ func autoType(s string) any {
 	return s
 }
 
-func exeDir(exe string) string {
-	for i := len(exe) - 1; i >= 0; i-- {
-		if exe[i] == '/' || exe[i] == '\\' {
-			return exe[:i]
-		}
-	}
-	return "."
-}

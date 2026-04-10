@@ -84,6 +84,7 @@ func (p *Processor) Enqueue(prompt, chatID, messageID string) {
 	isQueued := depth > 0
 
 	go func() {
+		defer p.logger.Recover("queue-processor")
 		mu := p.getChatLock(chatID)
 
 		// 排队时显示等待表情

@@ -40,3 +40,10 @@ func (l *Logger) Close() {
 		l.file.Close()
 	}
 }
+
+// Recover 用于 goroutine 的 panic 恢复，在 defer 中调用
+func (l *Logger) Recover(name string) {
+	if r := recover(); r != nil {
+		l.Log("[PANIC] %s: %v", name, r)
+	}
+}
