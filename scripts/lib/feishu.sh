@@ -62,22 +62,102 @@ remove_reaction() {
     return 1
 }
 
-# Truncate message to Feishu limit
+# Fit a message into a single Feishu message update/send payload.
 truncate_message() {
     local message="$1"
-    if [[ ${#message} -gt 4000 ]]; then
-        echo "${message:0:3997}..."
+    if [[ ${#message} -gt "$FEISHU_MESSAGE_LIMIT" ]]; then
+        echo "${message:0:$((FEISHU_MESSAGE_LIMIT - 3))}..."
     else
         echo "$message"
     fi
 }
 
-# Reply to a Feishu message by quoting it (with retry), prints message_id on success
-# Usage: reply_to_feishu <message_id> <text> [--markdown]
-reply_to_feishu() {
+message_chunk_count() {
+    local message="$1"
+    local length=${#message}
+    if (( length == 0 )); then
+        echo 1
+        return 0
+    fi
+
+    local total=1
+    while true; do
+        local suffix payload_limit needed
+        suffix=$(message_chunk_suffix "$total" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
+        fi
+        needed=$(( (length + payload_limit - 1) / payload_limit ))
+        if (( needed == total )); then
+            echo "$total"
+            return 0
+        fi
+        total="$needed"
+    done
+}
+
+message_chunk_suffix() {
+    local index="$1"
+    local total="$2"
+    if (( total <= 1 )); then
+        echo ""
+    else
+        printf '\n\n[%s/%s]' "$index" "$total"
+    fi
+}
+
+message_chunk_at() {
+    local message="$1"
+    local start="$2"
+    local index="${3:-1}"
+    local total="${4:-1}"
+    local suffix payload_limit chunk
+
+    suffix=$(message_chunk_suffix "$index" "$total")
+    payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+    if (( payload_limit <= 0 )); then
+        payload_limit=1
+    fi
+
+    chunk="${message:start:payload_limit}"
+    printf '%s%s\n' "$chunk" "$suffix"
+}
+
+send_message_once() {
+    local chat_id="$1"
+    local message="$2"
+    local use_markdown="${3:-}"
+
+    local msg_flag="--text"
+    if [[ "$use_markdown" == "--markdown" ]]; then
+        msg_flag="--markdown"
+    fi
+
+    local attempt=0
+    while (( attempt < MAX_RETRIES )); do
+        local response
+        response=$(lark-cli im +messages-send \
+            --chat-id "$chat_id" \
+            $msg_flag "$message" \
+            --as bot 2>&1)
+
+        if echo "$response" | jq -e '.ok == true or .code == 0' &>/dev/null; then
+            return 0
+        fi
+
+        attempt=$((attempt + 1))
+        log_feishu_failure "Send" "$attempt" "$response"
+        sleep 2
+    done
+
+    log "Send failed after $MAX_RETRIES attempts"
+    return 1
+}
+
+reply_message_once() {
     local message_id="$1"
-    local message
-    message=$(truncate_message "$2")
+    local message="$2"
     local use_markdown="${3:-}"
 
     local msg_flag="--text"
@@ -109,31 +189,72 @@ reply_to_feishu() {
     return 1
 }
 
+# Reply to a Feishu message by quoting it (with retry), prints message_id on success
+# Usage: reply_to_feishu <message_id> <text> [--markdown]
+reply_to_feishu() {
+    local message_id="$1"
+    local message="$2"
+    local use_markdown="${3:-}"
+    local first_reply_msg_id=""
+    local start=0
+    local total index payload_limit suffix
+
+    total=$(message_chunk_count "$message")
+    index=1
+    while (( start < ${#message} || start == 0 )); do
+        local chunk reply_msg_id
+        chunk=$(message_chunk_at "$message" "$start" "$index" "$total")
+        reply_msg_id=$(reply_message_once "$message_id" "$chunk" "$use_markdown") || return 1
+        if [[ -z "$first_reply_msg_id" ]]; then
+            first_reply_msg_id="$reply_msg_id"
+        fi
+        suffix=$(message_chunk_suffix "$index" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
+        fi
+        start=$((start + payload_limit))
+        index=$((index + 1))
+        if (( ${#message} == 0 )); then
+            break
+        fi
+    done
+
+    if [[ -n "$first_reply_msg_id" ]]; then
+        echo "$first_reply_msg_id"
+        return 0
+    fi
+
+    return 1
+}
+
 # Send a message to a Feishu chat (not quoting, for commands)
 send_to_feishu() {
     local chat_id="$1"
-    local message
-    message=$(truncate_message "$2")
+    local message="$2"
+    local use_markdown="${3:-}"
+    local start=0
+    local total index payload_limit suffix
 
-    local attempt=0
-    while (( attempt < MAX_RETRIES )); do
-        local response
-        response=$(lark-cli im +messages-send \
-            --chat-id "$chat_id" \
-            --text "$message" \
-            --as bot 2>&1)
-
-        if echo "$response" | jq -e '.ok == true or .code == 0' &>/dev/null; then
-            return 0
+    total=$(message_chunk_count "$message")
+    index=1
+    while (( start < ${#message} || start == 0 )); do
+        local chunk
+        chunk=$(message_chunk_at "$message" "$start" "$index" "$total")
+        send_message_once "$chat_id" "$chunk" "$use_markdown" || return 1
+        suffix=$(message_chunk_suffix "$index" "$total")
+        payload_limit=$((FEISHU_MESSAGE_LIMIT - ${#suffix}))
+        if (( payload_limit <= 0 )); then
+            payload_limit=1
         fi
-
-        attempt=$((attempt + 1))
-        log_feishu_failure "Send" "$attempt" "$response"
-        sleep 2
+        start=$((start + payload_limit))
+        index=$((index + 1))
+        if (( ${#message} == 0 )); then
+            break
+        fi
     done
 
-    log "Send failed after $MAX_RETRIES attempts"
-    return 1
+    return 0
 }
 
 # Update an existing Feishu message (for streaming)
