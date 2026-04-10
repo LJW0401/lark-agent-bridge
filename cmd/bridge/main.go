@@ -107,6 +107,7 @@ func bridgeMain(stop <-chan struct{}) {
 
 	// 初始化各模块
 	fc := feishu.NewClient(cfg, logger)
+	defer fc.Close()
 	sm := session.NewManager(cfg)
 	tm := task.NewManager(cfg, logger)
 

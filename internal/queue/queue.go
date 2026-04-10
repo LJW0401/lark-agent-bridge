@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LJW0401/lark-agent-bridge/internal/agent"
@@ -56,8 +57,7 @@ func (p *Processor) getChatLock(chatID string) *sync.Mutex {
 func (p *Processor) incrDepth(chatID string) int {
 	v, _ := p.chatDepth.LoadOrStore(chatID, new(int32))
 	ptr := v.(*int32)
-	old := *ptr
-	*ptr++
+	old := atomic.AddInt32(ptr, 1) - 1
 	return int(old)
 }
 
@@ -67,9 +67,8 @@ func (p *Processor) decrDepth(chatID string) {
 		return
 	}
 	ptr := v.(*int32)
-	*ptr--
-	if *ptr <= 0 {
-		*ptr = 0
+	if atomic.AddInt32(ptr, -1) < 0 {
+		atomic.StoreInt32(ptr, 0)
 	}
 }
 
@@ -158,9 +157,13 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 		result, err := ag.Run(ctx, prompt, workspace, sessionID, &outputBuf)
 		if err != nil {
 			errCh <- err
-		} else {
-			resultCh <- result
+			return
 		}
+		if result == nil {
+			errCh <- fmt.Errorf("Agent 返回了空结果")
+			return
+		}
+		resultCh <- result
 	}()
 
 	// 流式轮询更新

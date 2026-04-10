@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -13,13 +14,31 @@ import (
 
 // Client 封装所有 lark-cli 调用
 type Client struct {
-	cfg    *config.Config
-	logger *config.Logger
+	cfg       *config.Config
+	logger    *config.Logger
+	subCmd    *exec.Cmd // 事件订阅子进程
 }
 
 // NewClient 创建飞书客户端
 func NewClient(cfg *config.Config, logger *config.Logger) *Client {
 	return &Client{cfg: cfg, logger: logger}
+}
+
+// Close 清理子进程
+func (c *Client) Close() {
+	if c.subCmd != nil && c.subCmd.Process != nil {
+		c.logger.Log("终止 lark-cli 事件订阅进程 (PID: %d)", c.subCmd.Process.Pid)
+		c.subCmd.Process.Signal(os.Interrupt)
+		// 给进程 3 秒优雅退出
+		done := make(chan error, 1)
+		go func() { done <- c.subCmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			c.subCmd.Process.Kill()
+		}
+		c.subCmd = nil
+	}
 }
 
 // Event 表示飞书事件中解析出的消息
@@ -52,6 +71,7 @@ func (c *Client) Subscribe(events chan<- Event) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动 lark-cli event subscribe 失败: %w", err)
 	}
+	c.subCmd = cmd
 
 	// 捕获 stderr：仅记录真正的错误（JSON 格式），忽略 lark-cli 状态信息和 SDK 内部日志
 	go func() {
