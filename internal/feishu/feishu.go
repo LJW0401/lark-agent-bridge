@@ -180,8 +180,10 @@ func (c *Client) parseEvent(raw string) *Event {
 
 // AddReaction 给消息添加表情，返回 reaction_id
 func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
-	params := fmt.Sprintf(`{"message_id":"%s"}`, messageID)
-	data := fmt.Sprintf(`{"reaction_type":{"emoji_type":"%s"}}`, emojiType)
+	paramsBytes, _ := json.Marshal(map[string]string{"message_id": messageID})
+	params := string(paramsBytes)
+	dataBytes, _ := json.Marshal(map[string]any{"reaction_type": map[string]string{"emoji_type": emojiType}})
+	data := string(dataBytes)
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "create",
@@ -205,7 +207,8 @@ func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
 
 // RemoveReaction 移除消息表情
 func (c *Client) RemoveReaction(messageID, reactionID string) error {
-	params := fmt.Sprintf(`{"message_id":"%s","reaction_id":"%s"}`, messageID, reactionID)
+	paramsBytes, _ := json.Marshal(map[string]string{"message_id": messageID, "reaction_id": reactionID})
+	params := string(paramsBytes)
 
 	for attempt := 1; attempt <= c.cfg.Retry.MaxRetries; attempt++ {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "delete",
