@@ -195,6 +195,14 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			}
 			p.cleanupTask(chatID, messageID, taskID, reactionID)
 			return
+		case <-ctx.Done():
+			// 取消后立即响应，不等 Agent 退出
+			p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
+			if replyMsgID != "" {
+				p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
+			}
+			p.cleanupTask(chatID, messageID, taskID, reactionID)
+			return
 		case <-ticker.C:
 			current := outputBuf.String()
 			if current != "" && current != lastContent && replyMsgID != "" {
