@@ -130,7 +130,14 @@ func (m *Manager) Transition(taskID string, newState State, reason string) error
 		t.Note = ""
 	}
 
-	return m.save(t)
+	err = m.save(t)
+
+	// 任务进入终态后清理锁，防止 sync.Map 无限增长
+	if newState == StateCompleted || newState == StateCancelled || newState == StateFailed {
+		m.locks.Delete(taskID)
+	}
+
+	return err
 }
 
 // ReadField 读取任务字段

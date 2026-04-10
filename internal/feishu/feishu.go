@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/LJW0401/lark-agent-bridge/internal/config"
@@ -14,9 +15,10 @@ import (
 
 // Client 封装所有 lark-cli 调用
 type Client struct {
-	cfg       *config.Config
-	logger    *config.Logger
-	subCmd    *exec.Cmd // 事件订阅子进程
+	cfg    *config.Config
+	logger *config.Logger
+	mu     sync.Mutex // 保护 subCmd
+	subCmd *exec.Cmd  // 事件订阅子进程
 }
 
 // NewClient 创建飞书客户端
@@ -24,20 +26,27 @@ func NewClient(cfg *config.Config, logger *config.Logger) *Client {
 	return &Client{cfg: cfg, logger: logger}
 }
 
-// Close 清理子进程
+// Close 清理子进程，并发安全，可多次调用
 func (c *Client) Close() {
-	if c.subCmd != nil && c.subCmd.Process != nil {
-		c.logger.Log("终止 lark-cli 事件订阅进程 (PID: %d)", c.subCmd.Process.Pid)
-		c.subCmd.Process.Signal(os.Interrupt)
-		// 给进程 3 秒优雅退出
-		done := make(chan error, 1)
-		go func() { done <- c.subCmd.Wait() }()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			c.subCmd.Process.Kill()
-		}
-		c.subCmd = nil
+	c.mu.Lock()
+	cmd := c.subCmd
+	c.subCmd = nil
+	c.mu.Unlock()
+
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+
+	c.logger.Log("终止 lark-cli 事件订阅进程 (PID: %d)", cmd.Process.Pid)
+	cmd.Process.Signal(os.Interrupt)
+	// 给进程 3 秒优雅退出
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		cmd.Process.Kill()
+		<-done
 	}
 }
 
@@ -51,6 +60,9 @@ type Event struct {
 
 // Subscribe 订阅飞书事件，逐条解析后通过 channel 发送
 func (c *Client) Subscribe(events chan<- Event) error {
+	// 如果已有订阅进程，先关闭
+	c.Close()
+
 	args := []string{"event", "+subscribe"}
 	for _, t := range c.cfg.Feishu.EventTypes {
 		args = append(args, "--event-types", t)
@@ -71,7 +83,10 @@ func (c *Client) Subscribe(events chan<- Event) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("启动 lark-cli event subscribe 失败: %w", err)
 	}
+
+	c.mu.Lock()
 	c.subCmd = cmd
+	c.mu.Unlock()
 
 	// 捕获 stderr：仅记录真正的错误（JSON 格式），忽略 lark-cli 状态信息和 SDK 内部日志
 	go func() {

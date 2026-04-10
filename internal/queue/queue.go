@@ -26,6 +26,7 @@ type Processor struct {
 	agents  map[string]agent.Agent
 
 	// per-chat 互斥锁，替代 flock
+	// 注意：条目不会主动清理，但 chat 数量通常有限，不会无限增长
 	chatLocks sync.Map // map[chatID]*sync.Mutex
 	// per-chat 队列深度
 	chatDepth sync.Map // map[chatID]*int32
