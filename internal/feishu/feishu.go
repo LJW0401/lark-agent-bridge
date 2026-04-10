@@ -67,7 +67,7 @@ func (c *Client) Subscribe(events chan<- Event) error {
 	for _, t := range c.cfg.Feishu.EventTypes {
 		args = append(args, "--event-types", t)
 	}
-	args = append(args, "--as", "bot", "--force")
+	args = append(args, "--as", "bot")
 
 	c.logger.Log("执行命令: %s %s", c.cfg.Feishu.LarkCliCmd, strings.Join(args, " "))
 	cmd := exec.Command(c.cfg.Feishu.LarkCliCmd, args...)
@@ -88,22 +88,32 @@ func (c *Client) Subscribe(events chan<- Event) error {
 	c.subCmd = cmd
 	c.mu.Unlock()
 
-	// 捕获 stderr：仅记录真正的错误（JSON 格式），忽略 lark-cli 状态信息和 SDK 内部日志
+	// 捕获 stderr：记录错误和关键状态，过滤 SDK 内部噪音
 	go func() {
 		defer c.logger.Recover("feishu-stderr-scanner")
 		errScanner := bufio.NewScanner(stderr)
 		for errScanner.Scan() {
 			line := errScanner.Text()
-			// JSON 错误响应（如 not configured）需要记录
-			if strings.HasPrefix(strings.TrimSpace(line), "{") ||
-				strings.HasPrefix(strings.TrimSpace(line), "}") ||
-				strings.Contains(line, `"ok": false`) ||
-				strings.Contains(line, `"error"`) ||
-				strings.Contains(line, `"message"`) ||
-				strings.Contains(line, `"hint"`) {
-				c.logger.Log("lark-cli error: %s", line)
+			// 去掉 ANSI 颜色码后判断
+			plain := stripAnsi(line)
+			switch {
+			// JSON 错误响应（如 not configured）
+			case strings.HasPrefix(strings.TrimSpace(plain), "{"),
+				strings.HasPrefix(strings.TrimSpace(plain), "}"),
+				strings.Contains(plain, `"ok": false`),
+				strings.Contains(plain, `"error"`):
+				c.logger.Log("lark-cli error: %s", plain)
+			// 连接状态（重要，需要知道是否连上）
+			case strings.Contains(plain, "Connected"),
+				strings.Contains(plain, "Connecting"),
+				strings.Contains(plain, "disconnected"),
+				strings.Contains(plain, "reconnect"),
+				strings.Contains(plain, "terminated"),
+				strings.Contains(plain, "shutting down"):
+				c.logger.Log("lark-cli: %s", plain)
+			// SDK Error 中的 "not found handler" 是正常的，静默
+			// 其他 SDK Info 也静默
 			}
-			// 状态信息、SDK Info/Error、连接信息等静默丢弃
 		}
 	}()
 
@@ -424,5 +434,25 @@ func truncOut(out []byte) string {
 		s = s[:200]
 	}
 	return s
+}
+
+// stripAnsi 去掉 ANSI 转义序列（颜色码等）
+func stripAnsi(s string) string {
+	result := strings.Builder{}
+	inEsc := false
+	for _, r := range s {
+		if r == '\033' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+				inEsc = false
+			}
+			continue
+		}
+		result.WriteRune(r)
+	}
+	return result.String()
 }
 
