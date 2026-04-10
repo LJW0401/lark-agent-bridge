@@ -34,7 +34,7 @@ func main() {
 	// 检查是否有子命令
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
-		case "install", "uninstall", "start", "stop", "status", "logs":
+		case "install", "uninstall", "start", "stop", "restart", "status", "logs":
 			ensureRoot()
 			handleServiceCommand(os.Args[1])
 			return
@@ -47,6 +47,12 @@ func main() {
 		case "help":
 			printUsage()
 			return
+		default:
+			// 以 - 开头的是 flag（如 --config），交给 bridgeMain 处理
+			if !strings.HasPrefix(os.Args[1], "-") {
+				fmt.Fprintf(os.Stderr, "未知命令: %s\n使用 'lark-agent-bridge help' 查看帮助\n", os.Args[1])
+				os.Exit(1)
+			}
 		}
 	}
 
@@ -199,6 +205,13 @@ func handleServiceCommand(cmd string) {
 			os.Exit(1)
 		}
 
+	case "restart":
+		svc.Stop()
+		if err := svc.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "启动失败: %v\n", err)
+			os.Exit(1)
+		}
+
 	case "status":
 		status, err := svc.Status()
 		if err != nil {
@@ -301,6 +314,7 @@ func printUsage() {
 	fmt.Println("  uninstall              卸载系统服务")
 	fmt.Println("  start                  启动服务")
 	fmt.Println("  stop                   停止服务")
+	fmt.Println("  restart                重启服务")
 	fmt.Println("  status                 查看服务状态")
 	fmt.Println("  logs [-f]              查看服务日志")
 	fmt.Println()
