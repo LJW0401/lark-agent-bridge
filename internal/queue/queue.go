@@ -198,8 +198,10 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 		case err := <-errCh:
 			elapsed := time.Since(startTime).Seconds()
 			if ctx.Err() != nil {
-				// 被取消
-				p.logger.Log("Agent 取消: 耗时 %.1f 秒", elapsed)
+				// 被取消（Agent 已收到 SIGINT 优雅退出）
+				// 清除会话：即使优雅退出，服务端会话也可能处于不可恢复的中间状态
+				p.session.ClearSession(chatID)
+				p.logger.Log("Agent 取消: 耗时 %.1f 秒, 已清除会话", elapsed)
 				p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
 				if replyMsgID != "" {
 					p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
@@ -215,7 +217,9 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			p.cleanupTask(chatID, messageID, taskID, reactionID)
 			return
 		case <-ctx.Done():
-			// 取消后立即响应，不等 Agent 退出
+			// 取消后立即响应，清除会话避免下次 resume 失败
+			p.session.ClearSession(chatID)
+			p.logger.Log("Agent 取消: 已清除会话, 下次将启动新会话")
 			p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
 			if replyMsgID != "" {
 				p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
