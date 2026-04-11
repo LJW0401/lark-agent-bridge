@@ -163,12 +163,14 @@ func bridgeMain(stop <-chan struct{}) {
 			if strings.HasPrefix(prompt, "//") {
 				prompt = prompt[1:]
 				logger.Log("转义命令前缀: %s", prompt)
+				prompt = feishu.BuildPrompt(prompt, ev.Mentions, cfg.Feishu.LarkCliCmd)
 				qp.Enqueue(prompt, ev.ChatID, ev.MessageID)
 				continue
 			}
 
 			// 命令处理；非命令则入队
 			if !ch.Handle(prompt, ev.ChatID, ev.MessageID) {
+				prompt = feishu.BuildPrompt(prompt, ev.Mentions, cfg.Feishu.LarkCliCmd)
 				qp.Enqueue(prompt, ev.ChatID, ev.MessageID)
 			}
 		}

@@ -33,21 +33,24 @@ func NewClient(cfg *config.Config, logger *config.Logger) *Client {
 // fetchBotOpenID 获取机器人的 open_id
 func (c *Client) fetchBotOpenID() {
 	out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "GET",
-		"/open-apis/bot/v3/info", "--as", "bot").CombinedOutput()
+		"/open-apis/bot/v3/info", "--as", "bot").Output()
 	if err != nil {
-		c.logger.Log("获取机器人信息失败: %v | %s", err, truncOut(out))
+		c.logger.Log("获取机器人信息失败: %v", err)
 		return
 	}
 	var resp map[string]any
 	if err := json.Unmarshal(out, &resp); err != nil {
+		c.logger.Log("解析机器人信息失败: %v | %s", err, truncOut(out))
 		return
 	}
 	if bot, ok := resp["bot"].(map[string]any); ok {
 		if openID, ok := bot["open_id"].(string); ok {
 			c.botOpenID = openID
 			c.logger.Log("机器人 open_id: %s", openID)
+			return
 		}
 	}
+	c.logger.Log("未能从响应中提取机器人 open_id: %s", truncOut(out))
 }
 
 // Close 清理子进程，并发安全，可多次调用
@@ -74,6 +77,14 @@ func (c *Client) Close() {
 	}
 }
 
+// Mention 表示消息中 @提及 的用户
+type Mention struct {
+	Key    string // 占位符 key，如 @_user_1
+	Name   string // 用户名
+	OpenID string // 用户 open_id
+	IsBot  bool   // 是否是机器人自身
+}
+
 // Event 表示飞书事件中解析出的消息
 type Event struct {
 	ChatID    string
@@ -81,6 +92,7 @@ type Event struct {
 	MsgType   string
 	ChatType  string // "p2p" 或 "group"
 	Text      string
+	Mentions  []Mention // 被 @提及 的用户（不含机器人）
 }
 
 // Subscribe 订阅飞书事件，逐条解析后通过 channel 发送
@@ -188,10 +200,24 @@ func (c *Client) parseEvent(raw string) *Event {
 		return nil
 	}
 
+	// 解析 @mention 列表
+	mentions := c.parseMentions(data)
+
 	// 群聊中只处理 @机器人 的消息
 	if chatType == "group" {
-		if !c.isBotMentioned(data) {
-			return nil
+		if c.botOpenID == "" {
+			// 未获取到 bot open_id，放行所有消息避免功能不可用
+		} else {
+			botMentioned := false
+			for _, m := range mentions {
+				if m.IsBot {
+					botMentioned = true
+					break
+				}
+			}
+			if !botMentioned {
+				return nil
+			}
 		}
 	}
 
@@ -214,12 +240,20 @@ func (c *Client) parseEvent(raw string) *Event {
 		return nil
 	}
 
-	// 清理 @mention 占位符（如 @_user_1）
-	text = cleanMentionPlaceholders(text)
+	// 替换 @mention 占位符：机器人的删除，其他人替换为 @真实姓名
+	text = c.replaceMentionPlaceholders(text, mentions)
 
 	if text == "" {
 		c.logger.Log("跳过: 空文本 (type: %s)", msgType)
 		return nil
+	}
+
+	// 过滤掉机器人自身，只保留被 @ 的其他用户
+	var userMentions []Mention
+	for _, m := range mentions {
+		if !m.IsBot {
+			userMentions = append(userMentions, m)
+		}
 	}
 
 	return &Event{
@@ -228,6 +262,7 @@ func (c *Client) parseEvent(raw string) *Event {
 		MsgType:   msgType,
 		ChatType:  chatType,
 		Text:      text,
+		Mentions:  userMentions,
 	}
 }
 
@@ -486,37 +521,73 @@ func (c *Client) ReplyError(chatID, messageID, errMsg string) {
 
 // --- @mention 相关 ---
 
-// isBotMentioned 检查消息的 mentions 中是否包含机器人
-func (c *Client) isBotMentioned(data map[string]any) bool {
-	if c.botOpenID == "" {
-		// 未获取到 bot open_id，放行所有消息避免功能不可用
-		return true
-	}
-
-	// mentions 可能在多个路径下
+// parseMentions 从事件数据中提取所有 @mention 信息
+func (c *Client) parseMentions(data map[string]any) []Mention {
 	mentionsRaw := getNestedAny(data, []string{"event", "message", "mentions"})
 	if mentionsRaw == nil {
 		mentionsRaw = getNestedAny(data, []string{"message", "mentions"})
 	}
 
-	mentions, ok := mentionsRaw.([]any)
-	if !ok || len(mentions) == 0 {
-		return false
+	arr, ok := mentionsRaw.([]any)
+	if !ok {
+		return nil
 	}
 
-	for _, m := range mentions {
-		mention, ok := m.(map[string]any)
+	var result []Mention
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
 		if !ok {
 			continue
 		}
-		// id 可能是嵌套对象 {"open_id": "..."} 或直接字符串
-		if idObj, ok := mention["id"].(map[string]any); ok {
-			if openID, ok := idObj["open_id"].(string); ok && openID == c.botOpenID {
-				return true
-			}
+
+		mention := Mention{
+			Key:  strVal(m, "key"),
+			Name: strVal(m, "name"),
 		}
+
+		// open_id 在嵌套的 id 对象中
+		if idObj, ok := m["id"].(map[string]any); ok {
+			mention.OpenID = strVal(idObj, "open_id")
+		}
+
+		// 判断是否是机器人
+		if c.botOpenID != "" && mention.OpenID == c.botOpenID {
+			mention.IsBot = true
+		}
+
+		result = append(result, mention)
 	}
-	return false
+
+	return result
+}
+
+// replaceMentionPlaceholders 替换文本中的 @_user_N 占位符
+// 本机器人的占位符删除，其他用户/机器人替换为 @真实姓名
+func (c *Client) replaceMentionPlaceholders(text string, mentions []Mention) string {
+	// 记录已处理的占位符 key
+	handled := make(map[string]bool)
+	for _, m := range mentions {
+		if m.Key == "" {
+			continue
+		}
+		handled[m.Key] = true
+		if m.IsBot {
+			// 仅删除本机器人的占位符
+			text = strings.ReplaceAll(text, m.Key, "")
+		} else if m.Name != "" {
+			text = strings.ReplaceAll(text, m.Key, "@"+m.Name)
+		}
+		// name 为空且不是本 bot 的占位符保留原样
+	}
+	// 清理多余空白
+	text = multiSpaceRe.ReplaceAllString(text, " ")
+	return strings.TrimSpace(text)
+}
+
+// strVal 从 map 中安全取 string
+func strVal(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
 }
 
 // getNestedAny 从嵌套 map 中按路径取值（返回 any，不强制 string）
@@ -535,16 +606,8 @@ func getNestedAny(data map[string]any, keys []string) any {
 	return current
 }
 
-// mentionPlaceholderRe 匹配 @_user_N 占位符
 var mentionPlaceholderRe = regexp.MustCompile(`@_user_\d+`)
-
-// cleanMentionPlaceholders 移除文本中的 @_user_N 占位符并清理多余空白
-func cleanMentionPlaceholders(text string) string {
-	text = mentionPlaceholderRe.ReplaceAllString(text, "")
-	// 清理连续空格
-	text = regexp.MustCompile(`\s{2,}`).ReplaceAllString(text, " ")
-	return strings.TrimSpace(text)
-}
+var multiSpaceRe = regexp.MustCompile(`\s{2,}`)
 
 // --- 工具函数 ---
 
