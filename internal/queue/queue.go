@@ -201,10 +201,10 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	defer ticker.Stop()
 	lastContent := ""
 
-	// updateStatus 更新状态消息
+	// updateStatus 更新状态消息（不重试，失败则跳过）
 	updateStatus := func(text string) {
 		if statusMsgID != "" {
-			p.feishu.UpdateMessage(statusMsgID, text, false)
+			p.feishu.UpdateMessageOnce(statusMsgID, text, false)
 		}
 	}
 
