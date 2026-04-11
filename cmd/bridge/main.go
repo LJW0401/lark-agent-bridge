@@ -159,11 +159,16 @@ func bridgeMain(stop <-chan struct{}) {
 
 			prompt := ev.Text
 
+			// 获取群聊信息（私聊跳过）
+			var chatInfo *feishu.ChatInfo
+			if ev.ChatType == "group" {
+				chatInfo = fc.GetChatInfo(ev.ChatID)
+			}
+
 			// 转义前缀: // → 去掉第一个 / 直接发给 Agent
 			if strings.HasPrefix(prompt, "//") {
 				prompt = prompt[1:]
 				logger.Log("转义命令前缀: %s", prompt)
-				chatInfo := fc.GetChatInfo(ev.ChatID)
 				prompt = feishu.BuildPrompt(prompt, ev, chatInfo, cfg.Feishu.LarkCliCmd)
 				qp.Enqueue(prompt, ev.ChatID, ev.MessageID)
 				continue
@@ -171,7 +176,6 @@ func bridgeMain(stop <-chan struct{}) {
 
 			// 命令处理；非命令则入队
 			if !ch.Handle(prompt, ev.ChatID, ev.MessageID) {
-				chatInfo := fc.GetChatInfo(ev.ChatID)
 				prompt = feishu.BuildPrompt(prompt, ev, chatInfo, cfg.Feishu.LarkCliCmd)
 				qp.Enqueue(prompt, ev.ChatID, ev.MessageID)
 			}

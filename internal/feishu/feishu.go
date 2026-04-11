@@ -16,12 +16,15 @@ import (
 
 // ChatInfo 群聊基本信息
 type ChatInfo struct {
-	Name        string // 群名
-	Description string // 群描述
-	UserCount   string // 成员数
-	BotCount    string // 机器人数
-	OwnerID     string // 群主 open_id
+	Name        string    // 群名
+	Description string    // 群描述
+	UserCount   string    // 成员数
+	BotCount    string    // 机器人数
+	OwnerID     string    // 群主 open_id
+	cachedAt    time.Time // 缓存时间
 }
+
+const chatCacheTTL = 10 * time.Minute
 
 // Client 封装所有 lark-cli 调用
 type Client struct {
@@ -529,10 +532,14 @@ func (c *Client) ReplyError(chatID, messageID, errMsg string) {
 	c.SendMessage(chatID, "[错误] "+errMsg, false)
 }
 
-// GetChatInfo 获取群聊信息（带缓存）
+// GetChatInfo 获取群聊信息（带缓存，10 分钟过期）
 func (c *Client) GetChatInfo(chatID string) *ChatInfo {
 	if v, ok := c.chatCache.Load(chatID); ok {
-		return v.(*ChatInfo)
+		info := v.(*ChatInfo)
+		if time.Since(info.cachedAt) < chatCacheTTL {
+			return info
+		}
+		c.chatCache.Delete(chatID)
 	}
 
 	apiPath := fmt.Sprintf("/open-apis/im/v1/chats/%s", chatID)
@@ -558,6 +565,7 @@ func (c *Client) GetChatInfo(chatID string) *ChatInfo {
 		UserCount:   strVal(data, "user_count"),
 		BotCount:    strVal(data, "bot_count"),
 		OwnerID:     strVal(data, "owner_id"),
+		cachedAt:    time.Now(),
 	}
 
 	c.chatCache.Store(chatID, info)
@@ -651,7 +659,6 @@ func getNestedAny(data map[string]any, keys []string) any {
 	return current
 }
 
-var mentionPlaceholderRe = regexp.MustCompile(`@_user_\d+`)
 var multiSpaceRe = regexp.MustCompile(`\s{2,}`)
 
 // --- 工具函数 ---

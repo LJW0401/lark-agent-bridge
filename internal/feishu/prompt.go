@@ -38,7 +38,10 @@ func BuildPrompt(text string, ev Event, chatInfo *ChatInfo, larkCliCmd string) s
 		sb.WriteString("\n")
 	}
 
-	// lark-cli 工具说明
+	// lark-cli 工具说明（仅在有被提及用户时注入，避免普通问答浪费 token）
+	if len(ev.Mentions) == 0 {
+		return sb.String()
+	}
 	sb.WriteString(fmt.Sprintf(`你可以使用 %s 命令行工具操作飞书，以下是常用示例：
 
 # 创建日程（需要参与者的 open_id）
