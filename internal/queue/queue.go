@@ -244,7 +244,7 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 				}
 				p.feishu.ReplyError(chatID, messageID, fmt.Sprintf("Agent 执行失败: %v", err))
 			}
-			p.cleanupTask(chatID, messageID, taskID, reactionID)
+			p.cleanupTask(chatID, messageID, taskID, reactionID, false)
 			return
 		case <-ctx.Done():
 			elapsed := time.Since(startTime).Seconds()
@@ -257,7 +257,7 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			} else if replyMsgID != "" {
 				p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
 			}
-			p.cleanupTask(chatID, messageID, taskID, reactionID)
+			p.cleanupTask(chatID, messageID, taskID, reactionID, false)
 			return
 		case <-ticker.C:
 			current := outputBuf.String()
@@ -334,13 +334,16 @@ func (p *Processor) handleResult(result *agent.Result, chatID, messageID, taskID
 		}
 	}
 
-	p.cleanupTask(chatID, messageID, taskID, reactionID)
+	p.cleanupTask(chatID, messageID, taskID, reactionID, true)
 }
 
-func (p *Processor) cleanupTask(chatID, messageID, taskID, reactionID string) {
+func (p *Processor) cleanupTask(chatID, messageID, taskID, reactionID string, done bool) {
 	if reactionID != "" {
 		p.feishu.RemoveReaction(messageID, reactionID)
 		p.tasks.ClearField(taskID, "reaction_id")
+	}
+	if done {
+		p.feishu.AddReaction(messageID, p.cfg.Feishu.DoneEmoji)
 	}
 	p.tasks.ClearField(taskID, "agent_pid")
 	p.tasks.ClearCurrent(chatID, taskID)

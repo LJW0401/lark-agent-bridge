@@ -25,6 +25,7 @@ func AllFields() []configField {
 		{"agent.claude_cmd", "Claude Code 命令路径", "claude"},
 		{"feishu.lark_cli_cmd", "lark-cli 命令路径", "lark-cli"},
 		{"feishu.working_emoji", "处理中表情", "OnIt"},
+		{"feishu.done_emoji", "完成表情", "Done"},
 		{"feishu.error_emoji", "错误表情", "Frown"},
 		{"stream.interval", "流式更新间隔（秒）", "3"},
 		{"stream.message_limit", "单条消息字符上限", "4000"},
