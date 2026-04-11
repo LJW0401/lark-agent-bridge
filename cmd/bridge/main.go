@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 
@@ -127,8 +128,11 @@ func bridgeMain(stop <-chan struct{}) {
 		os.Exit(1)
 	}
 
+	hostname, _ := os.Hostname()
+
 	logger.Log("=== lark-agent-bridge started ===")
 	logger.Log("Version: %s", version)
+	logger.Log("OS: %s/%s, Go: %s, Hostname: %s, PID: %d", runtime.GOOS, runtime.GOARCH, runtime.Version(), hostname, os.Getpid())
 	logger.Log("Workspace: %s", cfg.Workspace.Dir)
 	logger.Log("Agent type: %s", cfg.Agent.Type)
 	logger.Log("Listening for Feishu bot messages...")

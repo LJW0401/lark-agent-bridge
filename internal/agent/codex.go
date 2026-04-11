@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/LJW0401/lark-agent-bridge/internal/config"
 )
@@ -47,6 +49,11 @@ func (c *Codex) run(ctx context.Context, prompt, workspace, sessionID string, ou
 	cmd := exec.CommandContext(ctx, c.cmd, args...)
 	cmd.Dir = workspace
 	cmd.Stdin = nil
+	// 取消时发 SIGINT 让 Agent 优雅退出并保存会话，而非 SIGKILL 暴力杀死
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(os.Interrupt)
+	}
+	cmd.WaitDelay = 10 * time.Second // SIGINT 后最多等 10 秒，超时再 SIGKILL
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {

@@ -133,6 +133,21 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 
 	sessionID := p.session.GetSessionID(chatID)
 
+	// 记录 Agent 启动信息
+	sessionDisplay := sessionID
+	if len(sessionDisplay) > 16 {
+		sessionDisplay = sessionDisplay[:16] + "..."
+	}
+	if sessionDisplay == "" {
+		sessionDisplay = "(新会话)"
+	}
+	promptDisplay := prompt
+	if len([]rune(promptDisplay)) > 100 {
+		promptDisplay = string([]rune(promptDisplay)[:100]) + "..."
+	}
+	p.logger.Log("Agent 启动: type=%s, workspace=%s, session=%s, prompt=%s",
+		agentType, workspace, sessionDisplay, promptDisplay)
+
 	// 添加工作表情 + 创建占位回复
 	reactionID, _ := p.feishu.AddReaction(messageID, p.cfg.Feishu.WorkingEmoji)
 	p.tasks.SetField(taskID, "reaction_id", reactionID)
@@ -150,7 +165,8 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 
 	p.tasks.Transition(taskID, task.StateRunning, "Agent 正在处理")
 
-	// 流式输出缓冲
+	// 流式输出缓冲（startTime 在后面流式轮询中也用到）
+	startTime := time.Now()
 	var outputBuf bytes.Buffer
 	resultCh := make(chan *agent.Result, 1)
 	errCh := make(chan error, 1)
@@ -171,22 +187,26 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	// 流式轮询更新
 	ticker := time.NewTicker(time.Duration(p.cfg.Stream.Interval) * time.Second)
 	defer ticker.Stop()
-	startTime := time.Now()
-	lastContent := ""
 
 	for {
 		select {
 		case result := <-resultCh:
+			p.logger.Log("Agent 耗时: %.1f 秒", time.Since(startTime).Seconds())
 			p.handleResult(result, chatID, messageID, taskID, reactionID, replyMsgID)
 			return
 		case err := <-errCh:
+			elapsed := time.Since(startTime).Seconds()
 			if ctx.Err() != nil {
-				// 被取消
+				// 被取消（Agent 已收到 SIGINT 优雅退出）
+				// 清除会话：即使优雅退出，服务端会话也可能处于不可恢复的中间状态
+				p.session.ClearSession(chatID)
+				p.logger.Log("Agent 取消: 耗时 %.1f 秒, 已清除会话", elapsed)
 				p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
 				if replyMsgID != "" {
 					p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
 				}
 			} else {
+				p.logger.Log("Agent 失败: 耗时 %.1f 秒, 错误: %v", elapsed, err)
 				p.tasks.Transition(taskID, task.StateFailed, fmt.Sprintf("Agent 执行失败: %v", err))
 				if replyMsgID != "" {
 					p.feishu.UpdateMessage(replyMsgID, "[错误] Agent 执行失败，请稍后重试", false)
@@ -195,14 +215,26 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			}
 			p.cleanupTask(chatID, messageID, taskID, reactionID)
 			return
+		case <-ctx.Done():
+			// 取消后立即响应，清除会话避免下次 resume 失败
+			p.session.ClearSession(chatID)
+			p.logger.Log("Agent 取消: 已清除会话, 下次将启动新会话")
+			p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
+			if replyMsgID != "" {
+				p.feishu.UpdateMessage(replyMsgID, "[已取消] 请求已被用户中断。", false)
+			}
+			p.cleanupTask(chatID, messageID, taskID, reactionID)
+			return
 		case <-ticker.C:
 			current := outputBuf.String()
-			if current != "" && current != lastContent && replyMsgID != "" {
-				truncated := feishu.TruncateMessage(current, p.cfg.Stream.MessageLimit)
-				p.feishu.UpdateMessage(replyMsgID, truncated, false)
-				lastContent = current
-			} else if current == "" && replyMsgID != "" {
-				elapsed := int(time.Since(startTime).Seconds())
+			elapsed := int(time.Since(startTime).Seconds())
+			if current != "" && replyMsgID != "" {
+				// 有内容时：显示内容 + 末尾追加处理中标识
+				progress := fmt.Sprintf("\n\n⏳ 正在处理...（%d 秒）", elapsed)
+				display := feishu.TruncateMessage(current, p.cfg.Stream.MessageLimit-len([]rune(progress)))
+				p.feishu.UpdateMessage(replyMsgID, display+progress, false)
+			} else if replyMsgID != "" {
+				// 无内容时：仅显示等待
 				p.feishu.UpdateMessage(replyMsgID, fmt.Sprintf("⏳ 正在处理...（已等待 %d 秒）", elapsed), false)
 			}
 		}
@@ -210,10 +242,16 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 }
 
 func (p *Processor) handleResult(result *agent.Result, chatID, messageID, taskID, reactionID, replyMsgID string) {
+	outputLen := len([]rune(result.Output))
+	sessionDisplay := result.SessionID
+	if len(sessionDisplay) > 16 {
+		sessionDisplay = sessionDisplay[:16] + "..."
+	}
+	p.logger.Log("Agent 完成: output=%d 字符, session=%s", outputLen, sessionDisplay)
+
 	// 保存 session ID
 	if result.SessionID != "" {
 		p.session.SaveSessionID(chatID, result.SessionID)
-		p.logger.Log("保存会话: %s -> chat %s", result.SessionID, chatID)
 	}
 
 	if result.Output == "" {
