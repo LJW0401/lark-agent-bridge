@@ -199,7 +199,7 @@ func (c *Client) AddReaction(messageID, emojiType string) (string, error) {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "create",
 			"--params", params, "--data", data, "--as", "bot").CombinedOutput()
 		if err != nil {
-			c.logger.Log("Add reaction 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+			c.logger.Log("Add reaction 命令失败 (attempt %d/%d): %v | %s", attempt, c.cfg.Retry.MaxRetries, err, truncOut(out))
 		} else {
 			var resp map[string]any
 			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
@@ -224,7 +224,7 @@ func (c *Client) RemoveReaction(messageID, reactionID string) error {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "reactions", "delete",
 			"--params", params, "--as", "bot").CombinedOutput()
 		if err != nil {
-			c.logger.Log("Remove reaction 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+			c.logger.Log("Remove reaction 命令失败 (attempt %d/%d): %v | %s", attempt, c.cfg.Retry.MaxRetries, err, truncOut(out))
 		} else {
 			var resp map[string]any
 			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
@@ -268,7 +268,7 @@ func (c *Client) replyOnce(messageID, text string, markdown bool) (string, error
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-reply",
 			"--message-id", messageID, msgFlag, text, "--as", "bot").CombinedOutput()
 		if err != nil {
-			c.logger.Log("Reply 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+			c.logger.Log("Reply 命令失败 (attempt %d/%d): %v | %s", attempt, c.cfg.Retry.MaxRetries, err, truncOut(out))
 		} else {
 			var resp map[string]any
 			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
@@ -306,7 +306,7 @@ func (c *Client) sendOnce(chatID, text string, markdown bool) error {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "im", "+messages-send",
 			"--chat-id", chatID, msgFlag, text, "--as", "bot").CombinedOutput()
 		if err != nil {
-			c.logger.Log("Send 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+			c.logger.Log("Send 命令失败 (attempt %d/%d): %v | %s", attempt, c.cfg.Retry.MaxRetries, err, truncOut(out))
 		} else {
 			var resp map[string]any
 			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
@@ -369,7 +369,7 @@ func (c *Client) UpdateMessage(msgID, text string, markdown bool) error {
 		out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "PUT", apiPath,
 			"--data", string(reqBytes), "--as", "bot").CombinedOutput()
 		if err != nil {
-			c.logger.Log("Update message 命令失败 (attempt %d/%d): %v", attempt, c.cfg.Retry.MaxRetries, err)
+			c.logger.Log("Update message 命令失败 (attempt %d/%d): %v | %s", attempt, c.cfg.Retry.MaxRetries, err, truncOut(out))
 		} else {
 			var resp map[string]any
 			if jsonErr := json.Unmarshal(out, &resp); jsonErr != nil {
