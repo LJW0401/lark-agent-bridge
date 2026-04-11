@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -13,17 +14,56 @@ import (
 	"github.com/LJW0401/lark-agent-bridge/internal/config"
 )
 
+// ChatInfo 群聊基本信息
+type ChatInfo struct {
+	Name        string    // 群名
+	Description string    // 群描述
+	UserCount   string    // 成员数
+	BotCount    string    // 机器人数
+	OwnerID     string    // 群主 open_id
+	cachedAt    time.Time // 缓存时间
+}
+
+const chatCacheTTL = 10 * time.Minute
+
 // Client 封装所有 lark-cli 调用
 type Client struct {
-	cfg    *config.Config
-	logger *config.Logger
-	mu     sync.Mutex // 保护 subCmd
-	subCmd *exec.Cmd  // 事件订阅子进程
+	cfg       *config.Config
+	logger    *config.Logger
+	mu        sync.Mutex // 保护 subCmd
+	subCmd    *exec.Cmd  // 事件订阅子进程
+	botOpenID string     // 机器人的 open_id，用于判断群聊 @mention
+	chatCache sync.Map   // map[chatID]*ChatInfo
 }
 
 // NewClient 创建飞书客户端
 func NewClient(cfg *config.Config, logger *config.Logger) *Client {
-	return &Client{cfg: cfg, logger: logger}
+	c := &Client{cfg: cfg, logger: logger}
+	c.fetchBotOpenID()
+	return c
+}
+
+// fetchBotOpenID 获取机器人的 open_id
+func (c *Client) fetchBotOpenID() {
+	out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "GET",
+		"/open-apis/bot/v3/info", "--as", "bot").Output()
+	if err != nil {
+		c.logger.Log("获取机器人信息失败: %v", err)
+		return
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(out, &resp); err != nil {
+		c.logger.Log("解析机器人信息失败: %v | %s", err, truncOut(out))
+		return
+	}
+	if bot, ok := resp["bot"].(map[string]any); ok {
+		if openID, ok := bot["open_id"].(string); ok {
+			c.botOpenID = openID
+			c.logger.Log("机器人 open_id: %s", openID)
+			return
+		}
+	}
+	c.logger.Log("未能从响应中提取机器人 open_id: %s", truncOut(out))
 }
 
 // Close 清理子进程，并发安全，可多次调用
@@ -50,12 +90,22 @@ func (c *Client) Close() {
 	}
 }
 
+// Mention 表示消息中 @提及 的用户
+type Mention struct {
+	Key    string // 占位符 key，如 @_user_1
+	Name   string // 用户名
+	OpenID string // 用户 open_id
+	IsBot  bool   // 是否是机器人自身
+}
+
 // Event 表示飞书事件中解析出的消息
 type Event struct {
 	ChatID    string
 	MessageID string
 	MsgType   string
+	ChatType  string // "p2p" 或 "group"
 	Text      string
+	Mentions  []Mention // 被 @提及 的用户（不含机器人）
 }
 
 // Subscribe 订阅飞书事件，逐条解析后通过 channel 发送
@@ -155,11 +205,33 @@ func (c *Client) parseEvent(raw string) *Event {
 	chatID := jsonPath(data, "event.message.chat_id", "chat_id", "message.chat_id")
 	messageID := jsonPath(data, "event.message.message_id", "message_id", "message.message_id")
 	msgType := jsonPath(data, "event.message.message_type", "message_type", "message.message_type")
+	chatType := jsonPath(data, "event.message.chat_type", "chat_type", "message.chat_type")
 	contentRaw := jsonPath(data, "event.message.content", "content", "message.content")
 
 	if chatID == "" || messageID == "" {
 		c.logger.Log("跳过: 缺少 chat_id 或 message_id")
 		return nil
+	}
+
+	// 解析 @mention 列表
+	mentions := c.parseMentions(data)
+
+	// 群聊中只处理 @机器人 的消息
+	if chatType == "group" {
+		if c.botOpenID == "" {
+			// 未获取到 bot open_id，放行所有消息避免功能不可用
+		} else {
+			botMentioned := false
+			for _, m := range mentions {
+				if m.IsBot {
+					botMentioned = true
+					break
+				}
+			}
+			if !botMentioned {
+				return nil
+			}
+		}
 	}
 
 	// 提取文本内容
@@ -181,16 +253,29 @@ func (c *Client) parseEvent(raw string) *Event {
 		return nil
 	}
 
+	// 替换 @mention 占位符：机器人的删除，其他人替换为 @真实姓名
+	text = c.replaceMentionPlaceholders(text, mentions)
+
 	if text == "" {
 		c.logger.Log("跳过: 空文本 (type: %s)", msgType)
 		return nil
+	}
+
+	// 过滤掉机器人自身，只保留被 @ 的其他用户
+	var userMentions []Mention
+	for _, m := range mentions {
+		if !m.IsBot {
+			userMentions = append(userMentions, m)
+		}
 	}
 
 	return &Event{
 		ChatID:    chatID,
 		MessageID: messageID,
 		MsgType:   msgType,
+		ChatType:  chatType,
 		Text:      text,
+		Mentions:  userMentions,
 	}
 }
 
@@ -446,6 +531,135 @@ func (c *Client) ReplyError(chatID, messageID, errMsg string) {
 	c.AddReaction(messageID, c.cfg.Feishu.ErrorEmoji)
 	c.SendMessage(chatID, "[错误] "+errMsg, false)
 }
+
+// GetChatInfo 获取群聊信息（带缓存，10 分钟过期）
+func (c *Client) GetChatInfo(chatID string) *ChatInfo {
+	if v, ok := c.chatCache.Load(chatID); ok {
+		info := v.(*ChatInfo)
+		if time.Since(info.cachedAt) < chatCacheTTL {
+			return info
+		}
+		c.chatCache.Delete(chatID)
+	}
+
+	apiPath := fmt.Sprintf("/open-apis/im/v1/chats/%s", chatID)
+	out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "GET", apiPath,
+		"--as", "bot").Output()
+	if err != nil {
+		return nil
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil
+	}
+
+	data, ok := resp["data"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	info := &ChatInfo{
+		Name:        strVal(data, "name"),
+		Description: strVal(data, "description"),
+		UserCount:   strVal(data, "user_count"),
+		BotCount:    strVal(data, "bot_count"),
+		OwnerID:     strVal(data, "owner_id"),
+		cachedAt:    time.Now(),
+	}
+
+	c.chatCache.Store(chatID, info)
+	return info
+}
+
+// --- @mention 相关 ---
+
+// parseMentions 从事件数据中提取所有 @mention 信息
+func (c *Client) parseMentions(data map[string]any) []Mention {
+	mentionsRaw := getNestedAny(data, []string{"event", "message", "mentions"})
+	if mentionsRaw == nil {
+		mentionsRaw = getNestedAny(data, []string{"message", "mentions"})
+	}
+
+	arr, ok := mentionsRaw.([]any)
+	if !ok {
+		return nil
+	}
+
+	var result []Mention
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		mention := Mention{
+			Key:  strVal(m, "key"),
+			Name: strVal(m, "name"),
+		}
+
+		// open_id 在嵌套的 id 对象中
+		if idObj, ok := m["id"].(map[string]any); ok {
+			mention.OpenID = strVal(idObj, "open_id")
+		}
+
+		// 判断是否是机器人
+		if c.botOpenID != "" && mention.OpenID == c.botOpenID {
+			mention.IsBot = true
+		}
+
+		result = append(result, mention)
+	}
+
+	return result
+}
+
+// replaceMentionPlaceholders 替换文本中的 @_user_N 占位符
+// 本机器人的占位符删除，其他用户/机器人替换为 @真实姓名
+func (c *Client) replaceMentionPlaceholders(text string, mentions []Mention) string {
+	// 记录已处理的占位符 key
+	handled := make(map[string]bool)
+	for _, m := range mentions {
+		if m.Key == "" {
+			continue
+		}
+		handled[m.Key] = true
+		if m.IsBot {
+			// 仅删除本机器人的占位符
+			text = strings.ReplaceAll(text, m.Key, "")
+		} else if m.Name != "" {
+			text = strings.ReplaceAll(text, m.Key, "@"+m.Name)
+		}
+		// name 为空且不是本 bot 的占位符保留原样
+	}
+	// 清理多余空白
+	text = multiSpaceRe.ReplaceAllString(text, " ")
+	return strings.TrimSpace(text)
+}
+
+// strVal 从 map 中安全取 string
+func strVal(m map[string]any, key string) string {
+	v, _ := m[key].(string)
+	return v
+}
+
+// getNestedAny 从嵌套 map 中按路径取值（返回 any，不强制 string）
+func getNestedAny(data map[string]any, keys []string) any {
+	var current any = data
+	for _, key := range keys {
+		m, ok := current.(map[string]any)
+		if !ok {
+			return nil
+		}
+		current, ok = m[key]
+		if !ok {
+			return nil
+		}
+	}
+	return current
+}
+
+var multiSpaceRe = regexp.MustCompile(`\s{2,}`)
 
 // --- 工具函数 ---
 
