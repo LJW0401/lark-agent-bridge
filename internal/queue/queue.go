@@ -152,12 +152,17 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	reactionID, _ := p.feishu.AddReaction(messageID, p.cfg.Feishu.WorkingEmoji)
 	p.tasks.SetField(taskID, "reaction_id", reactionID)
 
-	// 创建流式卡片回复（失败则降级为普通消息）
-	card, cardErr := p.feishu.ReplyStreamingCard(messageID, "⏳ 正在处理...")
+	// 发送状态消息（处理时间信息）
+	statusMsgID, _ := p.feishu.ReplyMessage(messageID, "⏳ 正在处理...", false)
+
+	// 创建流式卡片（Agent 输出结果，降级则复用状态消息）
+	card, cardErr := p.feishu.ReplyStreamingCard(messageID, "")
 	var replyMsgID string
 	if cardErr != nil {
 		p.logger.Log("流式卡片创建失败，降级为普通消息: %v", cardErr)
-		replyMsgID, _ = p.feishu.ReplyMessage(messageID, "⏳ 正在处理...", false)
+		// 降级时状态消息兼作结果消息
+		replyMsgID = statusMsgID
+		statusMsgID = ""
 	} else {
 		replyMsgID = card.MessageID
 	}
@@ -167,7 +172,6 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// 存储 cancel 函数供 /cancel 命令使用
 	p.storeCancelFunc(chatID, taskID, cancel)
 	defer p.clearCancelFunc(chatID, taskID)
 
@@ -197,14 +201,24 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 	defer ticker.Stop()
 	lastContent := ""
 
+	// updateStatus 更新状态消息
+	updateStatus := func(text string) {
+		if statusMsgID != "" {
+			p.feishu.UpdateMessage(statusMsgID, text, false)
+		}
+	}
+
 	for {
 		select {
 		case result := <-resultCh:
-			p.logger.Log("Agent 耗时: %.1f 秒", time.Since(startTime).Seconds())
-			// 最终结果：用卡片流式更新写入完整内容
+			elapsed := time.Since(startTime).Seconds()
+			p.logger.Log("Agent 耗时: %.1f 秒", elapsed)
+			// 最终结果写入卡片
 			if card != nil && result.Output != "" {
 				p.feishu.UpdateStreamingContent(card, result.Output)
 			}
+			// 状态消息更新为完成
+			updateStatus(fmt.Sprintf("✅ 处理完成（耗时 %.1f 秒）", elapsed))
 			p.handleResult(result, chatID, messageID, taskID, reactionID, replyMsgID, card)
 			return
 		case err := <-errCh:
@@ -213,6 +227,7 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 				p.session.ClearSession(chatID)
 				p.logger.Log("Agent 取消: 耗时 %.1f 秒, 已清除会话", elapsed)
 				p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
+				updateStatus(fmt.Sprintf("🚫 已取消（耗时 %.1f 秒）", elapsed))
 				if card != nil {
 					p.feishu.UpdateStreamingContent(card, "[已取消] 请求已被用户中断。")
 				} else if replyMsgID != "" {
@@ -221,6 +236,7 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			} else {
 				p.logger.Log("Agent 失败: 耗时 %.1f 秒, 错误: %v", elapsed, err)
 				p.tasks.Transition(taskID, task.StateFailed, fmt.Sprintf("Agent 执行失败: %v", err))
+				updateStatus(fmt.Sprintf("❌ 执行失败（耗时 %.1f 秒）", elapsed))
 				if card != nil {
 					p.feishu.UpdateStreamingContent(card, "[错误] Agent 执行失败，请稍后重试")
 				} else if replyMsgID != "" {
@@ -231,9 +247,11 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			p.cleanupTask(chatID, messageID, taskID, reactionID)
 			return
 		case <-ctx.Done():
+			elapsed := time.Since(startTime).Seconds()
 			p.session.ClearSession(chatID)
 			p.logger.Log("Agent 取消: 已清除会话, 下次将启动新会话")
 			p.tasks.Transition(taskID, task.StateCancelled, "任务已取消")
+			updateStatus(fmt.Sprintf("🚫 已取消（耗时 %.1f 秒）", elapsed))
 			if card != nil {
 				p.feishu.UpdateStreamingContent(card, "[已取消] 请求已被用户中断。")
 			} else if replyMsgID != "" {
@@ -244,22 +262,20 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 		case <-ticker.C:
 			current := outputBuf.String()
 			elapsed := int(time.Since(startTime).Seconds())
+			// 更新状态消息（处理时间）
+			updateStatus(fmt.Sprintf("⏳ 正在处理...（%d 秒）", elapsed))
+			// 更新结果卡片（纯 Agent 输出）
 			if card != nil {
-				// 流式卡片：只发纯累积文本，不附加变化的时间标识（否则破坏前缀关系，无打字机效果）
 				if current != "" && current != lastContent {
 					p.feishu.UpdateStreamingContent(card, current)
 					lastContent = current
-				} else if current == "" {
-					p.feishu.UpdateStreamingContent(card, fmt.Sprintf("⏳ 正在处理...（已等待 %d 秒）", elapsed))
 				}
 			} else if replyMsgID != "" {
-				// 降级：普通消息更新
+				// 降级：普通消息更新（状态和内容合一）
 				if current != "" {
 					progress := fmt.Sprintf("\n\n⏳ 正在处理...（%d 秒）", elapsed)
 					display := feishu.TruncateMessage(current, p.cfg.Stream.MessageLimit-len([]rune(progress)))
 					p.feishu.UpdateMessage(replyMsgID, display+progress, false)
-				} else {
-					p.feishu.UpdateMessage(replyMsgID, fmt.Sprintf("⏳ 正在处理...（已等待 %d 秒）", elapsed), false)
 				}
 			}
 		}
