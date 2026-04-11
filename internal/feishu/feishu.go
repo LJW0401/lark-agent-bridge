@@ -162,19 +162,25 @@ func (c *Client) parseEvent(raw string) *Event {
 		return nil
 	}
 
-	if msgType != "text" {
-		c.logger.Log("跳过非文本消息 (type: %s)", msgType)
+	// 提取文本内容
+	var text string
+	switch msgType {
+	case "text":
+		var content map[string]any
+		if err := json.Unmarshal([]byte(contentRaw), &content); err != nil {
+			c.logger.Log("解析 content JSON 失败: %v", err)
+			return nil
+		}
+		text, _ = content["text"].(string)
+
+	case "post":
+		text = extractPostText(contentRaw)
+
+	default:
+		c.logger.Log("跳过不支持的消息类型 (type: %s)", msgType)
 		return nil
 	}
 
-	// content 是一个 JSON 字符串，需要二次解析
-	var content map[string]any
-	if err := json.Unmarshal([]byte(contentRaw), &content); err != nil {
-		c.logger.Log("解析 content JSON 失败: %v", err)
-		return nil
-	}
-
-	text, _ := content["text"].(string)
 	if text == "" {
 		c.logger.Log("跳过: 空文本")
 		return nil
