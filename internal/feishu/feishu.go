@@ -387,6 +387,54 @@ func (c *Client) UpdateMessage(msgID, text string, markdown bool) error {
 	return fmt.Errorf("update message 失败，已重试 %d 次", c.cfg.Retry.MaxRetries)
 }
 
+// UpdateMessageOnce 更新消息（不重试，适用于状态消息等非关键更新）
+func (c *Client) UpdateMessageOnce(msgID, text string, markdown bool) error {
+	text = TruncateMessage(text, c.cfg.Stream.MessageLimit)
+
+	var msgType, content string
+	if markdown {
+		msgType = "post"
+		body := map[string]any{
+			"zh_cn": map[string]any{
+				"content": []any{
+					[]any{
+						map[string]any{"tag": "md", "text": text},
+					},
+				},
+			},
+		}
+		b, _ := json.Marshal(body)
+		content = string(b)
+	} else {
+		msgType = "text"
+		body := map[string]string{"text": text}
+		b, _ := json.Marshal(body)
+		content = string(b)
+	}
+
+	reqBody := map[string]string{
+		"msg_type": msgType,
+		"content":  content,
+	}
+	reqBytes, _ := json.Marshal(reqBody)
+
+	apiPath := fmt.Sprintf("/open-apis/im/v1/messages/%s", msgID)
+
+	out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "PUT", apiPath,
+		"--data", string(reqBytes), "--as", "bot").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("update message 失败: %v | %s", err, truncOut(out))
+	}
+
+	var resp map[string]any
+	if json.Unmarshal(out, &resp) == nil {
+		if code, ok := resp["code"].(float64); ok && code != 0 {
+			return fmt.Errorf("update message 失败: code=%d", int(code))
+		}
+	}
+	return nil
+}
+
 // ReplyError 发送错误反馈
 func (c *Client) ReplyError(chatID, messageID, errMsg string) {
 	c.AddReaction(messageID, c.cfg.Feishu.ErrorEmoji)
