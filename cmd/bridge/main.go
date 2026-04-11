@@ -155,7 +155,7 @@ func bridgeMain(stop <-chan struct{}) {
 				return
 			}
 
-			logger.Log("收到消息: %s (chat: %s, msg: %s)", ev.Text, ev.ChatID, ev.MessageID)
+			logger.Log("收到消息: %s (chat: %s, type: %s, msg: %s)", ev.Text, ev.ChatID, ev.ChatType, ev.MessageID)
 
 			prompt := ev.Text
 
