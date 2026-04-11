@@ -33,6 +33,7 @@ type Client struct {
 	mu        sync.Mutex // 保护 subCmd
 	subCmd    *exec.Cmd  // 事件订阅子进程
 	botOpenID string     // 机器人的 open_id，用于判断群聊 @mention
+	botName   string     // 机器人名称
 	chatCache sync.Map   // map[chatID]*ChatInfo
 }
 
@@ -59,12 +60,19 @@ func (c *Client) fetchBotOpenID() {
 	if bot, ok := resp["bot"].(map[string]any); ok {
 		if openID, ok := bot["open_id"].(string); ok {
 			c.botOpenID = openID
+			c.botName, _ = bot["app_name"].(string)
 			c.logger.Log("机器人 open_id: %s", openID)
 			return
 		}
 	}
 	c.logger.Log("未能从响应中提取机器人 open_id: %s", truncOut(out))
 }
+
+// BotName 返回机器人名称
+func (c *Client) BotName() string { return c.botName }
+
+// BotOpenID 返回机器人的 open_id
+func (c *Client) BotOpenID() string { return c.botOpenID }
 
 // Close 清理子进程，并发安全，可多次调用
 func (c *Client) Close() {

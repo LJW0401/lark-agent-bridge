@@ -135,6 +135,12 @@ func bridgeMain(stop <-chan struct{}) {
 	logger.Log("OS: %s/%s, Go: %s, Hostname: %s, PID: %d", runtime.GOOS, runtime.GOARCH, runtime.Version(), hostname, os.Getpid())
 	logger.Log("Workspace: %s", cfg.Workspace.Dir)
 	logger.Log("Agent type: %s", cfg.Agent.Type)
+	if fc.BotName() != "" {
+		logger.Log("Bot: %s (open_id: %s)", fc.BotName(), fc.BotOpenID())
+	} else {
+		logger.Log("Bot: (未获取到机器人信息)")
+	}
+	logger.Log("lark-cli: %s", cfg.Feishu.LarkCliCmd)
 	logger.Log("Listening for Feishu bot messages...")
 
 	// 信号处理
