@@ -245,10 +245,9 @@ func (p *Processor) processMessage(prompt, chatID, messageID, taskID string) {
 			current := outputBuf.String()
 			elapsed := int(time.Since(startTime).Seconds())
 			if card != nil {
-				// 流式卡片：累积内容 + 处理中标识
+				// 流式卡片：只发纯累积文本，不附加变化的时间标识（否则破坏前缀关系，无打字机效果）
 				if current != "" && current != lastContent {
-					progress := fmt.Sprintf("\n\n⏳ 正在处理...（%d 秒）", elapsed)
-					p.feishu.UpdateStreamingContent(card, current+progress)
+					p.feishu.UpdateStreamingContent(card, current)
 					lastContent = current
 				} else if current == "" {
 					p.feishu.UpdateStreamingContent(card, fmt.Sprintf("⏳ 正在处理...（已等待 %d 秒）", elapsed))
