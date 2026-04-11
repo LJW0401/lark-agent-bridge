@@ -7,19 +7,24 @@ import (
 )
 
 // extractPostText 从 post（富文本）消息的 content JSON 中提取纯文本
-// post content 结构: {"zh_cn": {"title": "...", "content": [[{tag, ...}], ...]}}
-// 支持多语言 key（zh_cn, en_us, ja_jp 等），优先 zh_cn，其次取第一个
+// 支持两种结构:
+//   - 扁平: {"title": "...", "content": [[{tag, ...}], ...]}
+//   - 多语言: {"zh_cn": {"title": "...", "content": [[{tag, ...}], ...]}}
 func extractPostText(contentRaw string) string {
 	var post map[string]any
 	if err := json.Unmarshal([]byte(contentRaw), &post); err != nil {
 		return ""
 	}
 
-	// 选择语言版本：优先 zh_cn，否则取第一个
+	// 判断结构：如果顶层有 content 数组，说明是扁平结构
 	var body map[string]any
-	if v, ok := post["zh_cn"].(map[string]any); ok {
+	if _, hasContent := post["content"].([]any); hasContent {
+		body = post
+	} else if v, ok := post["zh_cn"].(map[string]any); ok {
+		// 多语言结构：优先 zh_cn
 		body = v
 	} else {
+		// 多语言结构：取第一个语言版本
 		for _, v := range post {
 			if m, ok := v.(map[string]any); ok {
 				body = m

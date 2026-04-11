@@ -182,7 +182,7 @@ func (c *Client) parseEvent(raw string) *Event {
 	}
 
 	if text == "" {
-		c.logger.Log("跳过: 空文本")
+		c.logger.Log("跳过: 空文本 (type: %s, content: %s)", msgType, contentRaw)
 		return nil
 	}
 

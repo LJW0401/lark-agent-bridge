@@ -151,6 +151,16 @@ func TestExtractPostText(t *testing.T) {
 			expected: "**加粗** 和 *斜体*",
 		},
 		{
+			name: "扁平结构（实际飞书客户端格式）",
+			content: `{"title":"","content":[[{"tag":"text","text":"介绍下","style":[]},{"tag":"text","text":"飞书 CLI","style":[]}]]}`,
+			expected: "介绍下飞书 CLI",
+		},
+		{
+			name: "扁平结构带标题",
+			content: `{"title":"公告","content":[[{"tag":"text","text":"明天放假"}]]}`,
+			expected: "公告\n\n明天放假",
+		},
+		{
 			name: "无效JSON",
 			content:  `not json`,
 			expected: "",
