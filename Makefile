@@ -1,4 +1,6 @@
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+GIT_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+BUILD_TIME ?= $(shell date '+%Y%m%d-%H%M%S')
+VERSION ?= $(if $(findstring dirty,$(GIT_VERSION)),$(GIT_VERSION)-$(BUILD_TIME),$(GIT_VERSION))
 BINARY_NAME = lark-agent-bridge
 BUILD_DIR = build
 
