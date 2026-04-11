@@ -4,7 +4,7 @@
 
 ## 简介
 
-监听飞书机器人收到的消息，通过 [lark-cli](https://github.com/larksuite/cli) 事件订阅接收，转发给 AI Agent（Codex CLI 或 Claude Code）处理，并将结果回复到飞书。
+监听飞书机器人收到的消息，通过 [lark-cli](https://github.com/larksuite/cli) 事件订阅接收，转发给 AI Agent（Codex CLI 或 Claude Code）处理，并将结果以流式卡片（打字机效果）回复到飞书。
 
 ```
 用户向飞书机器人发送消息
@@ -16,19 +16,13 @@ lark-cli 事件订阅（WebSocket）
 消息队列（同一会话串行，跨会话并行）
         │
         ▼
-创建任务状态 → 维护 depth 计数 → 进入会话队列
-        │
-        ▼
-解析消息 → 添加表情 → 创建占位回复
+创建任务状态 → 添加工作表情 → 发送状态消息 + 流式卡片
         │
         ▼
 Codex CLI / Claude Code（无头模式）
-        │（实时轮询输出，带重试更新回复消息）
+        │（通过 cardkit API 实时流式推送，打字机效果）
         ▼
-最终结果渲染为 Markdown 富文本回复
-        │
-        ├─ 更新失败时降级为普通消息发送
-        └─ 完成后移除表情并写回任务状态
+最终结果写入卡片 → 状态消息更新为完成 → 添加完成表情
 ```
 
 ## 前置要求
@@ -43,25 +37,12 @@ Codex CLI / Claude Code（无头模式）
 
 从 [Releases](https://github.com/LJW0401/lark-agent-bridge/releases) 下载对应平台的二进制文件。
 
-### 方式二：一键安装（Linux）
-
-```bash
-./installer/linux/install.sh
-```
-
-### 方式三：deb 包安装（Ubuntu/Debian）
-
-```bash
-sudo dpkg -i lark-agent-bridge_*_amd64.deb
-```
-
-### 方式四：从源码编译
+### 方式二：从源码编译
 
 ```bash
 # 安装 Go 1.21+
 make build          # 编译当前平台
 make cross          # 交叉编译 Linux + Windows
-make deb            # 构建 .deb 包
 ```
 
 ## 快速开始
@@ -101,6 +82,15 @@ lark-agent-bridge
 
 以 `//` 开头可将 `/` 命令发给 Agent，如 `//help`。
 
+## 回复方式
+
+服务使用飞书流式卡片回复，支持打字机效果：
+
+- **状态消息**：实时显示处理时间（⏳ 正在处理... → ✅ 处理完成）
+- **结果卡片**：Agent 输出以打字机动画逐字呈现，支持 Markdown 渲染
+- **表情反馈**：处理中显示 OnIt 表情，完成后替换为 Done 表情
+- **降级策略**：流式卡片创建失败时自动降级为普通消息更新
+
 ## 配置管理
 
 使用 `config` 子命令管理配置，无需手动编辑文件：
@@ -122,6 +112,7 @@ lark-agent-bridge config path            # 显示配置文件路径
 | `agent.claude_cmd` | `claude` | Claude Code 命令路径 |
 | `feishu.lark_cli_cmd` | `lark-cli` | lark-cli 命令路径 |
 | `feishu.working_emoji` | `OnIt` | 处理中表情 |
+| `feishu.done_emoji` | `Done` | 完成表情 |
 | `feishu.error_emoji` | `Frown` | 错误表情 |
 | `stream.interval` | `3` | 流式更新间隔（秒） |
 | `stream.message_limit` | `4000` | 单条消息字符上限 |
@@ -149,6 +140,7 @@ lark-agent-bridge uninstall   # 卸载服务
 - 每个飞书会话（chat_id）独立维护会话上下文
 - 上下文持续保留直到超时或手动清除（`/new`）
 - 切换 Agent 类型时自动清除当前会话上下文
+- `/cancel` 取消任务后自动清除会话（SIGINT 优雅退出）
 - 超时时间通过 `session.timeout` 配置，默认永不超时
 
 ## 任务状态机
@@ -170,16 +162,16 @@ lark-agent-bridge/
 ├── cmd/bridge/main.go            # 入口：子命令路由 + 主循环
 ├── internal/
 │   ├── config/                   # 配置加载、日志、config 子命令、向导
-│   ├── feishu/                   # 飞书 API（事件订阅、消息、表情、分片）
+│   ├── feishu/                   # 飞书 API（事件订阅、消息、表情、流式卡片）
 │   ├── agent/                    # Agent 接口 + codex/claude 实现
 │   ├── session/                  # 会话管理（上下文、工作目录、Agent 类型）
 │   ├── task/                     # 任务状态机（per-task 锁、文件持久化）
 │   ├── queue/                    # 消息队列（per-chat goroutine 串行）
 │   └── commands/                 # 飞书斜杠命令处理
 ├── platform/                     # 跨平台服务管理 + 提权
-├── installer/                    # 安装包（Linux deb/脚本、Windows Inno Setup）
 ├── config.example.yaml           # 配置模板
-└── Makefile                      # 构建 + 交叉编译 + deb 打包
+├── Makefile                      # 构建 + 交叉编译
+└── CLAUDE.md                     # Claude Code 项目指令
 ```
 
 ## 许可证
