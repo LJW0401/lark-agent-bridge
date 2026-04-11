@@ -14,6 +14,15 @@ import (
 	"github.com/LJW0401/lark-agent-bridge/internal/config"
 )
 
+// ChatInfo 群聊基本信息
+type ChatInfo struct {
+	Name        string // 群名
+	Description string // 群描述
+	UserCount   string // 成员数
+	BotCount    string // 机器人数
+	OwnerID     string // 群主 open_id
+}
+
 // Client 封装所有 lark-cli 调用
 type Client struct {
 	cfg       *config.Config
@@ -21,6 +30,7 @@ type Client struct {
 	mu        sync.Mutex // 保护 subCmd
 	subCmd    *exec.Cmd  // 事件订阅子进程
 	botOpenID string     // 机器人的 open_id，用于判断群聊 @mention
+	chatCache sync.Map   // map[chatID]*ChatInfo
 }
 
 // NewClient 创建飞书客户端
@@ -517,6 +527,41 @@ func (c *Client) UpdateMessageOnce(msgID, text string, markdown bool) error {
 func (c *Client) ReplyError(chatID, messageID, errMsg string) {
 	c.AddReaction(messageID, c.cfg.Feishu.ErrorEmoji)
 	c.SendMessage(chatID, "[错误] "+errMsg, false)
+}
+
+// GetChatInfo 获取群聊信息（带缓存）
+func (c *Client) GetChatInfo(chatID string) *ChatInfo {
+	if v, ok := c.chatCache.Load(chatID); ok {
+		return v.(*ChatInfo)
+	}
+
+	apiPath := fmt.Sprintf("/open-apis/im/v1/chats/%s", chatID)
+	out, err := exec.Command(c.cfg.Feishu.LarkCliCmd, "api", "GET", apiPath,
+		"--as", "bot").Output()
+	if err != nil {
+		return nil
+	}
+
+	var resp map[string]any
+	if err := json.Unmarshal(out, &resp); err != nil {
+		return nil
+	}
+
+	data, ok := resp["data"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	info := &ChatInfo{
+		Name:        strVal(data, "name"),
+		Description: strVal(data, "description"),
+		UserCount:   strVal(data, "user_count"),
+		BotCount:    strVal(data, "bot_count"),
+		OwnerID:     strVal(data, "owner_id"),
+	}
+
+	c.chatCache.Store(chatID, info)
+	return info
 }
 
 // --- @mention 相关 ---
