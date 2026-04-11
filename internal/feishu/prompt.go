@@ -42,35 +42,10 @@ func BuildPrompt(text string, ev Event, chatInfo *ChatInfo, larkCliCmd string) s
 	if len(ev.Mentions) == 0 {
 		return sb.String()
 	}
-	sb.WriteString(fmt.Sprintf(`你可以使用 %s 命令行工具操作飞书，以下是常用示例：
-
-# 创建日程（需要参与者的 open_id）
-%s api POST /open-apis/calendar/v4/calendars/primary/events --data '{
-  "summary": "会议标题",
-  "start_time": {"timestamp": "1234567890"},
-  "end_time": {"timestamp": "1234567900"},
-  "attendees": [{"type": "user", "is_optional": false, "user_id": "open_id值"}]
-}' --params '{"user_id_type": "open_id"}' --as user
-
-# 发送消息给用户
-%s api POST /open-apis/im/v1/messages --params '{"receive_id_type": "open_id"}' --data '{
-  "receive_id": "open_id值",
-  "msg_type": "text",
-  "content": "{\"text\":\"消息内容\"}"
-}' --as bot
-
-# 发送消息到群聊
-%s api POST /open-apis/im/v1/messages --params '{"receive_id_type": "chat_id"}' --data '{
-  "receive_id": "群聊ID",
-  "msg_type": "text",
-  "content": "{\"text\":\"消息内容\"}"
-}' --as bot
-
-# 查询用户信息
-%s api GET /open-apis/contact/v3/users/:user_id --params '{"user_id_type": "open_id"}' --as bot
-
-注意：如果不确定 API 用法，可以先运行 %s --help 或 %s api --help 查看帮助。
-`, larkCliCmd, larkCliCmd, larkCliCmd, larkCliCmd, larkCliCmd, larkCliCmd, larkCliCmd))
+	sb.WriteString(fmt.Sprintf(`你可以通过 %s 命令行工具操作飞书（发消息、创建日程、查询用户等）。
+用法：%s api <METHOD> <PATH> [--params <json>] [--data <json>] [--as bot|user]
+运行 %s --help 查看完整用法，用户 ID 类型统一使用 open_id。
+`, larkCliCmd, larkCliCmd, larkCliCmd))
 
 	return sb.String()
 }
